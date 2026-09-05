@@ -115,11 +115,30 @@ export async function requestOtp(
     }
   }
 
+  // Resolve every matching contact point through the merge chain.
+  //
+  // Filtering on `merged_into_id IS NULL` here would have meant that the moment a
+  // DPO merged a duplicate, the contact point sitting on the absorbed row stopped
+  // reaching anybody - the person's own phone number would silently stop working
+  // at the portal, which is s.6(4) failing for exactly the people the merge was
+  // meant to help. The contact point stays where the paper put it; the read
+  // follows the chain to whoever holds their consent now.
   const { rows: matches } = await executor.query<{ id: string }>(
-    `SELECT id FROM data_principal
-      WHERE merged_into_id IS NULL
-        AND (($1 = 'sms'   AND phone_e164 = $2)
-          OR ($1 = 'email' AND email      = $2))`,
+    `WITH RECURSIVE matched AS (
+       SELECT id, merged_into_id
+         FROM data_principal
+        WHERE ($1 = 'sms'   AND phone_e164 = $2)
+           OR ($1 = 'email' AND email      = $2)
+     ),
+     chain(id, merged_into_id, depth) AS (
+       SELECT id, merged_into_id, 0 FROM matched
+       UNION ALL
+       SELECT p.id, p.merged_into_id, c.depth + 1
+         FROM data_principal p
+         JOIN chain c ON p.id = c.merged_into_id
+        WHERE c.depth < 16
+     )
+     SELECT DISTINCT id FROM chain WHERE merged_into_id IS NULL`,
     [parsed.channel, parsed.value],
   );
 

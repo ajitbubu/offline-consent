@@ -3,15 +3,16 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, FileText, ShieldAlert } from "lucide-react";
 import { requireStaff } from "@/lib/auth";
-import { writeAudit } from "@/lib/audit";
 import {
   loadAbsorbed,
   loadArtifacts,
   loadAuditTrail,
   loadConsents,
   loadPrincipal,
+  recordPrincipalView,
 } from "@/lib/register";
 import { Badge, type Tone } from "@/components/ui/badge";
+import { MergeForm } from "@/components/merge-form";
 import { Panel } from "@/components/ui/panel";
 import {
   consentStatusLabels,
@@ -62,11 +63,15 @@ const ACTION_LABELS: Record<string, string> = {
  * FR-14: every artifact, the consent now, and the full audit trail for one
  * person.
  *
- * Viewing writes `staff_viewed_principal`. The register is the most sensitive
- * screen in the application - it is one person's paper and every decision taken
- * about it - so reading it is itself an event worth recording. That the entry
- * may be written more than once for one visit (a prefetch, a re-render) is the
- * right way round: over-recording a view is safer than missing one.
+ * Viewing writes `staff_viewed_principal`, deduplicated per viewing session by
+ * recordPrincipalView. The register is the most sensitive screen in the
+ * application - one person's paper and every decision taken about it - so
+ * reading it is itself an event worth recording.
+ *
+ * It is recorded ONCE per session, not once per render. Server components render
+ * on prefetch, on Fast Refresh and again on navigation, and audit_log is
+ * append-only: the first version of this wrote 115 unremovable rows in twenty
+ * minutes and buried everything that mattered.
  */
 export default async function PrincipalPage({
   params,
@@ -91,12 +96,9 @@ export default async function PrincipalPage({
     loadAbsorbed(id),
   ]);
 
-  await writeAudit({
-    action: "staff_viewed_principal",
-    actorType: "staff",
-    actorId: staff.staffId,
-    dataPrincipalId: id,
-    newState: { artifacts: artifacts.length, consents: consents.length },
+  await recordPrincipalView(id, staff.staffId, {
+    artifacts: artifacts.length,
+    consents: consents.length,
   });
 
   return (
@@ -144,6 +146,10 @@ export default async function PrincipalPage({
             </span>
           ))}
         </p>
+      )}
+
+      {person.merged_into_id === null && (
+        <MergeForm absorbedId={person.id} absorbedName={person.full_name} />
       )}
 
       <Panel

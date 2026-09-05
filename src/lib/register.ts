@@ -137,8 +137,25 @@ export async function loadAbsorbed(id: string): Promise<{ id: string; full_name:
  *
  * Artifacts are the immutable half - what the paper said. They are never
  * rewritten to point at a merge survivor, so a merged person's evidence stays
- * attached to the identity that signed it and is read through the chain instead.
+ * attached to the identity that signed it and is read through the chain instead:
+ * this spans the whole chain, so a survivor's screen shows every piece of paper
+ * that is now theirs rather than only the ones they signed under this id.
  */
+export async function chainMembers(id: string): Promise<string[]> {
+  const { rows } = await query<{ id: string }>(
+    `WITH RECURSIVE chain(id, depth) AS (
+       SELECT $1::uuid, 0
+       UNION ALL
+       SELECT p.id, c.depth + 1
+         FROM data_principal p JOIN chain c ON p.merged_into_id = c.id
+        WHERE c.depth < 16
+     )
+     SELECT DISTINCT id FROM chain`,
+    [id],
+  );
+  return rows.map((r) => r.id);
+}
+
 export async function loadArtifacts(id: string): Promise<ArtifactRow[]> {
   const { rows } = await query<ArtifactRow>(
     `SELECT a.id,
@@ -168,9 +185,9 @@ export async function loadArtifacts(id: string): Promise<ArtifactRow[]> {
        FROM consent_artifact a
        LEFT JOIN consent_notice n ON n.id = a.notice_id
        LEFT JOIN staff_user s     ON s.id = a.transcribed_by
-      WHERE a.data_principal_id = $1
+      WHERE a.data_principal_id = ANY($1::uuid[])
       ORDER BY a.collected_on DESC NULLS LAST, a.committed_at DESC`,
-    [id],
+    [await chainMembers(id)],
   );
   return rows;
 }
@@ -205,10 +222,46 @@ export async function loadAuditTrail(id: string, limit = 200): Promise<AuditRow[
        FROM audit_log l
        LEFT JOIN staff_user s
          ON l.actor_type = 'staff' AND s.id::text = l.actor_id
-      WHERE l.data_principal_id = $1
+      WHERE l.data_principal_id = ANY($1::uuid[])
       ORDER BY l."timestamp" DESC, l.id DESC
       LIMIT $2`,
-    [id, limit],
+    [await chainMembers(id), limit],
   );
   return rows;
+}
+
+/**
+ * Records that a staff member looked at this person's record - once per viewing
+ * session, not once per render.
+ *
+ * The naive version of this wrote an entry from the page component and produced
+ * 115 rows in twenty minutes: React server components render on prefetch, on
+ * Fast Refresh, and again on navigation, and audit_log is append-only, so the
+ * noise could not be deleted afterwards. It buried the entries that matter -
+ * form digitised, consent withdrawn - under a wall of view records, and an audit
+ * trail nobody can read is worse than one that is slightly incomplete.
+ *
+ * The window collapses a session to a single entry. The write is conditional in
+ * SQL rather than a read followed by an insert, because two concurrent renders
+ * would both pass a separate check.
+ */
+const VIEW_DEDUPE_WINDOW = "30 minutes";
+
+export async function recordPrincipalView(
+  principalId: string,
+  staffId: string,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  await query(
+    `INSERT INTO audit_log (action, actor_type, actor_id, data_principal_id, new_state)
+     SELECT 'staff_viewed_principal', 'staff', $2, $1, $3::jsonb
+      WHERE NOT EXISTS (
+        SELECT 1 FROM audit_log
+         WHERE action = 'staff_viewed_principal'
+           AND data_principal_id = $1
+           AND actor_id = $2
+           AND "timestamp" > now() - $4::interval
+      )`,
+    [principalId, staffId, JSON.stringify(detail), VIEW_DEDUPE_WINDOW],
+  );
 }

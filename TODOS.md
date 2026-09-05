@@ -195,7 +195,59 @@ extraction quality.
 
 ---
 
-## 8. Smaller items
+## 8. Design debt from the /design-review pass (2026-09-05)
+
+Six findings were fixed on `fix/eng-review-p0`; these were left. Full report and
+before/after screenshots:
+`~/.gstack/projects/Code-base/designs/design-audit-20260905/`.
+
+**Component drift — the theme of the whole audit.** `src/components/ui/` exists and
+the app keeps hand-rolling what it already provides:
+
+- **11 hand-rolled callouts** across 6 files, 4 tones, 2 paddings, 2 text sizes.
+  `role="alert"` is on the red ones only, so `withdraw-client.tsx:251` — "We have no
+  record of X, nothing was withdrawn" — is silent to screen readers, and that is the
+  most consequential message the public flow can emit. Fix: one `Callout` primitive
+  taking `tone` and `role`, replacing all 11.
+- **`Panel`'s shell copied 5×** with 4 different inner paddings (`p-4`, `p-5`, `p-6`,
+  `px-5 py-4`). Same card, four rhythms.
+- **`OtpInput` re-implements `Field` + `Input`** line for line and has already drifted:
+  no required marker, no hint slot, hard-coded `otp-error` instead of the
+  `${id}-error` convention.
+- **The landing CTA is the one button not built from `Button`**, at `px-5 py-3`
+  instead of `px-4 py-2`. Four more hand-rolled buttons elsewhere.
+- **Two competing ghost styles**: `button.tsx:9` says `hover:bg-blue-soft`, used once;
+  eight places use `hover:underline`. The 8:1 majority is the real convention.
+
+**Typography.** h2 is `text-sm` everywhere — identical to body — so h1→h2 falls
+20px→14px with nothing between and h2 reads as a bold paragraph. No h3 exists. The
+consent list renders 5 cards under a single h1 with no per-card heading.
+
+**The invisible panel.** `bg-canvas` blocks sit on a `bg-canvas` page with no border,
+so the s.6(5) note ("withdrawal is not erasure") and the notice-page contact block
+render as slightly-indented grey text rather than contained callouts. Folds into the
+`Callout` work above.
+
+**Withdrawal is a dead end.** After withdrawing, the only action is "Back to the
+start". The principal token is still valid for 15 minutes, so "See my updated record"
+would close the loop; instead the person must request a new code to see what changed.
+
+**Draft review below 1024px.** `draft-form.tsx:278` is the file's only layout
+breakpoint; under `lg` the scan panel and commit button stack *after* four form
+panels, so the operator transcribes the paper with the scan off-screen. A fixed
+`h-96` iframe compounds it at 375px.
+
+**Date entry order.** `lang="en"` renders 4 March 2019 as `3/4/2019`. For an
+India-first register whose whole job is recording paper dates, the field needs an
+explicit format hint. Note the widget's own order is browser-locale controlled and
+cannot be forced from the page.
+
+**Dead route in the primary nav.** `/staff/principals` 404s but sits in `staff-nav.tsx:12`
+and is linked from the dashboard. Functional bug, not design — every DPO hits it.
+
+---
+
+## 9. Smaller items
 
 - **`libphonenumber-js` for `src/lib/phone.ts`.** `normalisePhone` accepts any
   `+`-prefixed E.164-shaped string with no country validation

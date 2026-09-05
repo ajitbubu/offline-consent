@@ -11,6 +11,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { pool, type Executor } from "@/lib/db";
+import { env } from "@/lib/env";
 import { writeAudit, type ComplianceTag } from "@/lib/audit";
 import {
   intakeModeForSource,
@@ -77,6 +78,15 @@ export const emptyPayload = (): DraftPayload => ({
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Today, as a civil date in the register's own timezone.
+ *
+ * 'en-CA' formats as YYYY-MM-DD, which compares correctly against the
+ * 'YYYY-MM-DD' strings the DATE parser in db.ts returns.
+ */
+const todayInAppZone = (): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: env.APP_TIMEZONE }).format(new Date());
+
+/**
  * Errors block a commit; warnings do not.
  *
  * A phone number that will not normalise is an ERROR, not a warning. Storing it
@@ -124,6 +134,7 @@ export function validateDraft(
   if (payload.items.length === 0) {
     issues.push({ field: "items", severity: "error", message: "Record at least one purpose" });
   }
+  const seenPurposeIds = new Set<string>();
   for (const item of payload.items) {
     if (!knownPurposeIds.has(item.purposeId)) {
       issues.push({
@@ -132,13 +143,32 @@ export function validateDraft(
         message: `"${item.verbatimLabel}" is not mapped to a purpose in the catalogue`,
       });
     }
+    // One purpose, one answer. The artifact items are written with ON CONFLICT
+    // DO NOTHING (first wins) while the projection loop below overwrites (last
+    // wins), so a duplicated purpose made the immutable evidence and the
+    // mutable record disagree about the same tick-box - the exact divergence
+    // the artifact/record split exists to prevent. Refused rather than
+    // silently resolved: which answer the paper really gave is a question for
+    // the reviewer, not for a tie-break rule.
+    if (seenPurposeIds.has(item.purposeId)) {
+      issues.push({
+        field: "items",
+        severity: "error",
+        message: `"${item.verbatimLabel}" appears twice. Record one answer per purpose.`,
+      });
+    }
+    seenPurposeIds.add(item.purposeId);
   }
 
   if (payload.collectedOn) {
     const collected = new Date(`${payload.collectedOn}T00:00:00Z`);
     if (Number.isNaN(collected.getTime())) {
       issues.push({ field: "collectedOn", severity: "error", message: "Not a valid date" });
-    } else if (collected.getTime() > Date.now()) {
+    } else if (payload.collectedOn > todayInAppZone()) {
+      // Compared as civil dates in the register's own timezone. Comparing a
+      // paper date against an instant used to reject a form dated today for
+      // anyone working between midnight and 05:30 IST, because UTC was still on
+      // yesterday's date.
       issues.push({
         field: "collectedOn",
         severity: "error",
@@ -151,6 +181,21 @@ export function validateDraft(
         message: "This form is unusually old. Check the year on the scan.",
       });
     }
+  }
+
+  // consent_artifact_date_matches_precision (migration 005) enforces this pairing
+  // at the database. Without a mirror here it was only discovered at the artifact
+  // INSERT, inside the commit transaction and after identity resolution, where it
+  // surfaced to the reviewer as an unexplained 500 with no field to correct.
+  if ((payload.collectedOnPrecision === "unknown") !== (payload.collectedOn === null)) {
+    issues.push({
+      field: "collectedOn",
+      severity: "error",
+      message:
+        payload.collectedOn === null
+          ? "Enter the date on the form, or set the precision to \"Undated form\""
+          : "An undated form cannot carry a date. Clear the date or change the precision.",
+    });
   }
 
   if (payload.collectedOnPrecision === "unknown") {
@@ -451,15 +496,23 @@ export async function commitDraft(
     const { rows: existingRows } = await client.query<{
       id: string;
       status: string;
-      withdrawn_at: Date | null;
+      withdrawn_on: string | null;
       consent_given_on: string | null;
       version: number;
     }>(
-      `SELECT id, status, withdrawn_at, consent_given_on, version
+      // withdrawn_at is a TIMESTAMPTZ and collected_on is a date off a piece of
+      // paper. Rendering the instant in UTC to compare them - which is what
+      // .toISOString() did - dated every withdrawal made between 00:00 and
+      // 05:30 IST a day early, and a day early is enough to make a withdrawal
+      // look older than the form and be overridden by it. Cast to a civil date
+      // in the register's own timezone here, so both sides of every comparison
+      // below are 'YYYY-MM-DD' strings and no JS Date is involved at all.
+      `SELECT id, status, consent_given_on, version,
+              (withdrawn_at AT TIME ZONE $3)::date AS withdrawn_on
          FROM consent_record
         WHERE data_principal_id = $1 AND purpose_id = $2
         FOR UPDATE`,
-      [principalId, item.purposeId],
+      [principalId, item.purposeId, env.APP_TIMEZONE],
     );
     const existing = existingRows[0];
 
@@ -480,17 +533,32 @@ export async function commitDraft(
       continue;
     }
 
-    // The rule that is easy to get wrong. A form digitised today may have been
-    // signed years ago; if the person has withdrawn since, committing it must
-    // not resurrect the consent they took back. An undated form counts as
-    // "cannot prove it postdates the withdrawal", so it is withheld too.
+    // The rules that are easy to get wrong, and they are one rule: a form only
+    // wins if it can be SHOWN to be later. Everything here is a comparison
+    // between two civil dates.
+    //
+    //   collectedOn NULL ──► never resurrects, never supersedes
+    //   withdrawn_on >= collectedOn ──► withhold  (a tie cannot be ordered)
+    //   consent_given_on > collectedOn ──► skip   (an older form)
+    //   otherwise ──► write
+
+    // An undated form proves no ordering against anything. Invariant 6 already
+    // says so for a withdrawal; it is equally true of a dated active record,
+    // which the supersession check below used to let an undated form overwrite
+    // because it required BOTH dates to be non-null before it would skip.
+    if (payload.collectedOn === null) {
+      if (existing.status === "withdrawn") withheldPurposeIds.push(item.purposeId);
+      continue;
+    }
+
+    // A form digitised today may have been signed years ago; if the person has
+    // withdrawn since, committing it must not resurrect the consent they took
+    // back. `>=` rather than `>`: a withdrawal and a form on the SAME day
+    // cannot be ordered from day-precision data, and auth.ts:revokedBy already
+    // resolves exactly this tie toward refusing, which is the right direction
+    // for a register of this kind.
     if (existing.status === "withdrawn") {
-      const withdrawnAt = existing.withdrawn_at;
-      const cannotProveNewer =
-        payload.collectedOn === null ||
-        (withdrawnAt !== null &&
-          withdrawnAt.toISOString().slice(0, 10) > payload.collectedOn);
-      if (cannotProveNewer) {
+      if (existing.withdrawn_on === null || existing.withdrawn_on >= payload.collectedOn) {
         withheldPurposeIds.push(item.purposeId);
         continue;
       }
@@ -498,11 +566,7 @@ export async function commitDraft(
 
     // Two forms for the same purpose: the later signature wins. An existing
     // record sourced from a newer form is left alone.
-    if (
-      existing.consent_given_on !== null &&
-      payload.collectedOn !== null &&
-      existing.consent_given_on > payload.collectedOn
-    ) {
+    if (existing.consent_given_on !== null && existing.consent_given_on > payload.collectedOn) {
       continue;
     }
 

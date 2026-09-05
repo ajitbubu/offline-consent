@@ -228,6 +228,145 @@ describe("commitDraft", () => {
       expect(result.noticeOwed).toBe(false);
     });
   });
+
+  it("refuses a form that answers the same purpose twice", async () => {
+    // REGRESSION (R3). consent_artifact_item is written with ON CONFLICT DO
+    // NOTHING (first wins) and the projection loop overwrites (last wins), so a
+    // duplicated purpose left the immutable evidence saying "declined" and the
+    // record enforcement reads saying "active" - about the same tick-box.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const purpose = fx.purposeIds[0];
+      const payload = {
+        principal: { fullName: "Dup Person", phone: "9876500042", phoneE164: null, email: null },
+        noticeId: fx.noticeId,
+        noticeAtCollection: "printed_on_form",
+        collectedOn: "2019-03-04",
+        collectedOnPrecision: "day",
+        collectionLocation: null,
+        subjectDeclaration: null,
+        items: [
+          { purposeId: purpose, granted: false, verbatimLabel: fx.labels[0] },
+          { purposeId: purpose, granted: true, verbatimLabel: fx.labels[0] },
+        ],
+      };
+      const { rows } = await client.query<{ id: string }>(
+        "INSERT INTO intake_draft (source, payload, created_by) VALUES ('manual', $1, $2) RETURNING id",
+        [JSON.stringify(payload), fx.staffId],
+      );
+
+      await expect(
+        commitDraft({ draftId: rows[0].id, staffId: fx.staffId }, client),
+      ).rejects.toMatchObject({ code: "validation_failed" });
+
+      const artifacts = await client.query("SELECT 1 FROM consent_artifact WHERE intake_draft_id = $1", [rows[0].id]);
+      expect(artifacts.rowCount).toBe(0);
+    });
+  });
+
+  it("does not let a form dated 4 March override a withdrawal made on 5 March IST", async () => {
+    // REGRESSION (R4). withdrawn_at is a TIMESTAMPTZ and was rendered with
+    // .toISOString(), i.e. in UTC. 01:00 on 5 March in Asia/Kolkata is 19:30 on
+    // 4 March in UTC, so the withdrawal compared as same-day against a form
+    // dated 4 March, lost the strict `>`, and the consent came back on.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await withdrawPurposes(
+        {
+          principalId: first.dataPrincipalId,
+          purposeIds: [fx.purposeIds[0]],
+          channel: "portal",
+          actorType: "data_principal",
+          actorId: first.dataPrincipalId,
+        },
+        client,
+      );
+      await client.query(
+        `UPDATE consent_record SET withdrawn_at = '2024-03-05 01:00:00+05:30'
+          WHERE data_principal_id = $1 AND purpose_id = $2`,
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+
+      const second = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+
+      expect(second.withheldPurposeIds).toContain(fx.purposeIds[0]);
+      const { rows } = await client.query<{ status: string }>(
+        "SELECT status FROM consent_record WHERE data_principal_id = $1 AND purpose_id = $2",
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+      expect(rows[0].status).toBe("withdrawn");
+    });
+  });
+
+  it("withholds when the form and the withdrawal fall on the same day", async () => {
+    // A tie cannot be ordered from day-precision data, so it resolves toward
+    // the withdrawal - the same direction auth.ts:revokedBy takes.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await withdrawPurposes(
+        {
+          principalId: first.dataPrincipalId,
+          purposeIds: [fx.purposeIds[0]],
+          channel: "portal",
+          actorType: "data_principal",
+          actorId: first.dataPrincipalId,
+        },
+        client,
+      );
+      await client.query(
+        `UPDATE consent_record SET withdrawn_at = '2024-03-04 14:00:00+05:30'
+          WHERE data_principal_id = $1 AND purpose_id = $2`,
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+
+      const second = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      expect(second.withheldPurposeIds).toContain(fx.purposeIds[0]);
+    });
+  });
+
+  it("does not let an undated form overwrite a dated record", async () => {
+    // REGRESSION (R6). The supersession guard required BOTH dates to be
+    // non-null before it would skip, so an undated form fell straight through
+    // to the UPDATE and replaced a dated consent - nulling consent_given_on on
+    // the way. An undated form cannot be shown to be later than anything.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2023-01-01" }), staffId: fx.staffId },
+        client,
+      );
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { collectedOn: null, granted: [false, false, false] }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+      expect(second.recordsWritten).toBe(0);
+
+      const { rows } = await client.query<{ status: string; consent_given_on: string | null }>(
+        "SELECT status, consent_given_on FROM consent_record WHERE data_principal_id = $1 AND purpose_id = $2",
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+      expect(rows[0].status).toBe("active");
+      expect(rows[0].consent_given_on).toBe("2023-01-01");
+    });
+  });
 });
 
 describe("the artifact is immutable", () => {

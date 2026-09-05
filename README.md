@@ -95,12 +95,19 @@ no bypass, including for the kiosk. Adding an intake mode means filling
   cannot catch a wrong commit transaction, and two real bugs (a dead brute-force
   counter, a dead supersession rule) were found exactly this way.
 - **CSV only, not `.xlsx`.** Say the word and it can be added.
+- **`payload_hash` changed meaning once.** It now covers the verbatim tick-box
+  wording, the date precision, the notice-at-collection value and the collection
+  location, none of which it covered before. Hashes written either side of that
+  change are not comparable; compare artifacts by content, not by hash, across
+  it.
 
 ## Status
 
 Built and verified: schema, staff auth, evidence storage, manual + scanned
 intake, review and commit, and the public withdrawal portal.
 
-Not yet built: bulk CSV import, kiosk capture, the DPO compliance surfaces
-(register search, notice-owed queue, cessation checklist, principal merge), and
-the field-extraction model. See the plan for the phased order.
+Not yet built: the DPO compliance surfaces (register search, notice-owed queue,
+cessation checklist, principal merge), bulk CSV import, kiosk capture, and the
+field-extraction model. The DPO surfaces now come first — bulk import
+industrialises duplicate creation and there is currently no way to see or fix a
+duplicate. See `TODOS.md` and `docs/PRD.md` §12.

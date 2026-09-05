@@ -277,10 +277,17 @@ The product does its whole job today: paper in, withdrawal out.
 | 2 | Staff authentication, roles, console shell | Shipped |
 | 3 | Evidence storage, manual and scanned intake, review, commit | Shipped |
 | 4 | Public withdrawal portal, one-time codes, notice pages | Shipped |
-| 5 | Bulk CSV import with column mapping and per-row report | Next |
+| 5 | Bulk CSV import with column mapping and per-row report | Blocked on 7 |
 | 6 | Kiosk capture with drawn signature | Planned |
-| 7 | DPO surfaces: register search, notice queue, cessation, merge | Planned |
+| 7 | DPO surfaces: register search, notice queue, cessation, merge | Next |
 | 8 | Extraction service: OCR, tick-box detection, layout model | Planned |
+
+**7 now precedes 5.** Bulk import pushes thousands of forms through an
+exact-name matcher, with a duplicate gate built for one-at-a-time human review
+(`commitDraft` throws `possible_duplicate` per draft) and no bulk merge on the
+other side. Every duplicate it creates is a consent record the person cannot
+withdraw and nobody can see, because register search and merge are two phases
+later. Phase 7 gives those duplicates somewhere to go. See `TODOS.md` items 1-3.
 
 ### Open decisions — the organisation's to make, not engineering's
 

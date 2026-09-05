@@ -9,6 +9,10 @@
  *    consent was validly obtained in the first place.
  *  - It does not fail when the consent is already withdrawn. A repeated request
  *    is a person insisting, not an error.
+ *  - It does not report success it did not achieve. Every branch returns an
+ *    outcome and writes an audit entry, including the one where there is no
+ *    record to withdraw, and the portal renders what came back rather than
+ *    assuming a 200 meant something changed.
  *  - It does not let a withdrawal be undone here. Re-granting consent requires a
  *    new artifact, which means new paper.
  */
@@ -54,6 +58,25 @@ export async function withdrawPurposes(
 
     const record = rows[0];
     if (!record) {
+      // No record for this (person, purpose). Audited like every other branch:
+      // a person exercising s.6(4) against something we cannot find is exactly
+      // the case where the evidence that they ASKED matters most, and it is
+      // also the signal that they have a second identity in the register whose
+      // consents this token cannot reach.
+      await writeAudit(
+        {
+          action: "consent_withdrawn",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          dataPrincipalId: input.principalId,
+          newState: { purposeId, channel: input.channel, outcome: "not_found" },
+          reason: input.reason ?? null,
+          complianceTags: ["dpdp_s6_4"],
+          ipAddress: input.ipAddress ?? null,
+          userAgent: input.userAgent ?? null,
+        },
+        client,
+      );
       outcomes.push({ purposeId, status: "not_found", changed: false, withdrawnOn: null });
       continue;
     }

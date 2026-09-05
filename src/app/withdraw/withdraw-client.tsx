@@ -2,11 +2,18 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { OtpInput } from "@/components/otp-input";
 import { consentStatusLabels, type ConsentStatus } from "@/lib/consent";
+
+interface WithdrawOutcome {
+  purposeId: string;
+  status: "withdrawn" | "declined" | "not_found";
+  changed: boolean;
+  withdrawnOn: string | null;
+}
 
 interface Consent {
   purposeId: string;
@@ -49,6 +56,7 @@ export function WithdrawClient() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
+  const [outcomes, setOutcomes] = useState<WithdrawOutcome[]>([]);
 
   async function loadConsents(bearer: string) {
     const response = await fetch("/api/portal/consents", {
@@ -147,6 +155,10 @@ export function WithdrawClient() {
         setError(body.error ?? "Could not record your withdrawal");
         return;
       }
+      // A 200 does not mean anything changed. Telling someone their consent is
+      // withdrawn when no record was touched is the worst failure this screen
+      // has, so the confirmation is built from what the server actually did.
+      setOutcomes(Array.isArray(body.outcomes) ? body.outcomes : []);
       setStage("done");
     } finally {
       setBusy(false);
@@ -156,19 +168,59 @@ export function WithdrawClient() {
   /* ---------------------------------------------------------------------- */
 
   if (stage === "done") {
+    const nameFor = (purposeId: string) =>
+      consents.find((c) => c.purposeId === purposeId)?.name ?? "That purpose";
+    const changed = outcomes.filter((o) => o.changed);
+    const alreadyWithdrawn = outcomes.filter((o) => !o.changed && o.status === "withdrawn");
+    const neverGiven = outcomes.filter((o) => o.status === "declined");
+    const missing = outcomes.filter((o) => o.status === "not_found");
+    const somethingHappened = changed.length > 0 || alreadyWithdrawn.length > 0;
+
     return (
       <div className="flex flex-col gap-4">
         <h1 className="flex items-center gap-2 text-xl font-semibold text-ink">
-          <CheckCircle2 size={22} className="text-green" aria-hidden />
-          Your withdrawal is recorded
+          {somethingHappened ? (
+            <CheckCircle2 size={22} className="text-green" aria-hidden />
+          ) : (
+            <AlertCircle size={22} className="text-muted" aria-hidden />
+          )}
+          {somethingHappened
+            ? "Your withdrawal is recorded"
+            : "We could not withdraw anything"}
         </h1>
-        <p className="text-ink">
-          We have stopped relying on your consent for what you selected, and we are
-          instructing the systems that hold your data to do the same.
-        </p>
+
+        {changed.length > 0 && (
+          <p className="text-ink">
+            We have stopped relying on your consent for{" "}
+            {changed.map((o) => nameFor(o.purposeId)).join(", ")}, and we are
+            instructing the systems that hold your data to do the same.
+          </p>
+        )}
+        {alreadyWithdrawn.length > 0 && (
+          <p className="text-ink">
+            {alreadyWithdrawn.map((o) => nameFor(o.purposeId)).join(", ")} had already
+            been withdrawn. We have recorded that you asked again.
+          </p>
+        )}
+        {neverGiven.length > 0 && (
+          <p className="text-ink">
+            {neverGiven.map((o) => nameFor(o.purposeId)).join(", ")} was never given, so
+            there was nothing to withdraw.
+          </p>
+        )}
+        {missing.length > 0 && (
+          // Not a success, and not silent. This usually means the register holds
+          // the person under a second identity that this contact point does not
+          // reach, which only a human can put right.
+          <p className="rounded-md bg-amber-soft px-4 py-3 text-sm text-amber">
+            We have no record of {missing.map((o) => nameFor(o.purposeId)).join(", ")} for
+            you, so nothing was withdrawn for it. Your request has been logged and someone
+            will look into it. Please contact us if you do not hear back.
+          </p>
+        )}
         {/* s.6(5) says withdrawal has no effect on processing already carried
             out. Saying so plainly is more honest than implying deletion. */}
-        <p className="rounded-md bg-canvas px-4 py-3 text-sm text-muted">
+        <p hidden={!somethingHappened} className="rounded-md bg-canvas px-4 py-3 text-sm text-muted">
           Withdrawing consent does not undo anything we did with your data before now,
           and it is not the same as deleting your data. If you want your data erased,
           that is a separate request — contact us and we will handle it.

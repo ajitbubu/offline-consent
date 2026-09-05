@@ -96,10 +96,6 @@ export async function putEvidence(
   const storageKey = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${randomUUID()}`;
   const sha256 = createHash("sha256").update(bytes).digest("hex");
 
-  const absolute = join(root(), storageKey);
-  await mkdir(dirname(absolute), { recursive: true });
-  await writeFile(absolute, bytes, { flag: "wx" });
-
   // Retention is stamped now and stored, so that changing
   // EVIDENCE_RETENTION_YEARS later can never move the retention date of
   // something already held.
@@ -108,6 +104,14 @@ export async function putEvidence(
     retentionUntil.getUTCFullYear() + env.EVIDENCE_RETENTION_YEARS,
   );
 
+  // The row is written BEFORE the bytes.
+  //
+  // Writing the file first meant a failed or rolled-back insert left a scan of
+  // somebody's signed consent form on disk with nothing referencing it - and
+  // an unreferenced object is one no retention sweep and no destroyEvidence
+  // call will ever reach, so it sits there permanently. In this order the
+  // failure mode is a row whose file is missing, which is detectable, and the
+  // compensating delete below usually removes even that.
   const { rows } = await executor.query<EvidenceObject>(
     `INSERT INTO evidence_object
        (storage_key, kind, content_type, original_filename, byte_size, sha256,
@@ -127,6 +131,21 @@ export async function putEvidence(
       meta.uploadedBy,
     ],
   );
+
+  const absolute = join(root(), storageKey);
+  try {
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, bytes, { flag: "wx" });
+  } catch (error) {
+    // Best effort: drop the row we just wrote so the two do not disagree. If
+    // this delete fails too, or the caller is inside a transaction that later
+    // rolls back, the row simply has no file - which getEvidenceBytes reports
+    // as ENOENT rather than hiding.
+    await executor
+      .query("DELETE FROM evidence_object WHERE id = $1", [rows[0].id])
+      .catch(() => {});
+    throw error;
+  }
 
   return rows[0];
 }

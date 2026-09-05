@@ -49,7 +49,13 @@ async function makePrincipal() {
     ["Test Principal", `+9198${String(Math.floor(Math.random() * 1e8)).padStart(8, "0")}`],
   );
   const id = rows[0].id;
-  cleanup.push(() => pool.query("DELETE FROM data_principal WHERE id = $1", [id]));
+  // merged_into_id is ON DELETE RESTRICT, so clear any inbound reference first:
+  // the merge tests below leave one row pointing at another and cleanup order
+  // is not guaranteed to unwind them in the right sequence.
+  cleanup.push(async () => {
+    await pool.query("UPDATE data_principal SET merged_into_id = NULL WHERE merged_into_id = $1", [id]);
+    await pool.query("DELETE FROM data_principal WHERE id = $1", [id]);
+  });
   return id;
 }
 
@@ -118,6 +124,45 @@ describe("revocation and role", () => {
     const staffId = await makeStaff("dpo");
     staffCookie = signStaffToken(staffId, "dpo");
     await expect(requireStaff("operator")).resolves.toMatchObject({ staffId, role: "dpo" });
+  });
+});
+
+describe("a merged identity (Invariant: reads follow the chain)", () => {
+  it("resolves a portal session to the surviving person", async () => {
+    // merged_into_id was SELECTed here and never read, so a token issued before
+    // a DPO merged this person into another kept resolving to the absorbed
+    // identity - showing an incomplete record and withdrawing from nothing.
+    const absorbed = await makePrincipal();
+    const survivor = await makePrincipal();
+    await pool.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [absorbed, survivor]);
+
+    await expect(requirePrincipal(bearer(signPrincipalToken(absorbed)))).resolves.toEqual({
+      principalId: survivor,
+    });
+  });
+
+  it("follows a chain more than one link long", async () => {
+    const a = await makePrincipal();
+    const b = await makePrincipal();
+    const c = await makePrincipal();
+    await pool.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [b, c]);
+    await pool.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [a, b]);
+
+    await expect(requirePrincipal(bearer(signPrincipalToken(a)))).resolves.toEqual({ principalId: c });
+  });
+
+  it("refuses a token when the surviving identity has been revoked", async () => {
+    const absorbed = await makePrincipal();
+    const survivor = await makePrincipal();
+    await pool.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [absorbed, survivor]);
+
+    const token = signPrincipalToken(absorbed);
+    const iat = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).iat as number;
+    await pool.query("UPDATE data_principal SET portal_tokens_valid_from = to_timestamp($2) WHERE id = $1", [survivor, iat]);
+
+    // Revoking the person must not be defeated by presenting a token minted
+    // for the identity that was folded into them.
+    await expect(requirePrincipal(bearer(token))).rejects.toBeInstanceOf(AuthError);
   });
 });
 

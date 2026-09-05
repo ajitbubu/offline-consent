@@ -367,6 +367,121 @@ describe("commitDraft", () => {
       expect(rows[0].consent_given_on).toBe("2023-01-01");
     });
   });
+
+  it("learns a contact point a later form supplies", async () => {
+    // matchPrincipal resolves on phone OR email, so this person was found by
+    // their phone number and the email on the second form used to be dropped.
+    // A contact point we were given and did not store is a withdrawal route
+    // that person will never have.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { phone: "9876500001", email: null }), staffId: fx.staffId },
+        client,
+      );
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, {
+            phone: "9876500001",
+            email: "person@example.org",
+            collectedOn: "2020-05-05",
+          }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+      expect(second.dataPrincipalId).toBe(first.dataPrincipalId);
+
+      const { rows } = await client.query<{ phone_e164: string; email: string | null }>(
+        "SELECT phone_e164, email FROM data_principal WHERE id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(rows[0].phone_e164).toBe("+919876500001");
+      expect(rows[0].email).toBe("person@example.org");
+
+      const { rows: audit } = await client.query<{ n: string }>(
+        `SELECT count(*) AS n FROM audit_log
+          WHERE data_principal_id = $1 AND new_state->>'change' = 'contact_point_learned'`,
+        [first.dataPrincipalId],
+      );
+      expect(Number(audit[0].n)).toBe(1);
+    });
+  });
+
+  it("covers the printed wording in the payload hash", async () => {
+    // The verbatim label is what the person actually ticked - the most legally
+    // significant field on the artifact - and it was outside the integrity
+    // hash, so two artifacts recording different printed wording hashed the same.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+
+      const draft = async (label: string) => {
+        const payload = {
+          principal: { fullName: "Hash Person", phone: "9876500077", phoneE164: null, email: null },
+          noticeId: fx.noticeId,
+          noticeAtCollection: "printed_on_form",
+          collectedOn: "2019-03-04",
+          collectedOnPrecision: "day",
+          collectionLocation: null,
+          subjectDeclaration: null,
+          items: [{ purposeId: fx.purposeIds[0], granted: true, verbatimLabel: label }],
+        };
+        const { rows } = await client.query<{ id: string }>(
+          "INSERT INTO intake_draft (source, payload, created_by) VALUES ('manual', $1, $2) RETURNING id",
+          [JSON.stringify(payload), fx.staffId],
+        );
+        return rows[0].id;
+      };
+
+      const a = await commitDraft({ draftId: await draft("I agree to marketing"), staffId: fx.staffId }, client);
+      const b = await commitDraft({ draftId: await draft("I agree to everything"), staffId: fx.staffId }, client);
+
+      const { rows } = await client.query<{ payload_hash: string }>(
+        "SELECT payload_hash FROM consent_artifact WHERE id = ANY($1::uuid[])",
+        [[a.artifactId, b.artifactId]],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].payload_hash).not.toBe(rows[1].payload_hash);
+    });
+  });
+
+  it("attaches a form to the survivor when the chosen person has been merged", async () => {
+    // The confirmPrincipalId path checked only that the row existed, so an
+    // artifact could be attached to an absorbed identity - which the portal
+    // resolves past, making those consents unwithdrawable.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { phone: "9876500011" }), staffId: fx.staffId },
+        client,
+      );
+      const { rows: survivor } = await client.query<{ id: string }>(
+        "INSERT INTO data_principal (full_name, phone_e164) VALUES ($1, $2) RETURNING id",
+        ["Survivor Person", "+919876500012"],
+      );
+      await client.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [
+        first.dataPrincipalId,
+        survivor[0].id,
+      ]);
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { phone: "9876500011", collectedOn: "2021-06-06" }),
+          staffId: fx.staffId,
+          confirmPrincipalId: first.dataPrincipalId,
+        },
+        client,
+      );
+
+      expect(second.dataPrincipalId).toBe(survivor[0].id);
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_record WHERE data_principal_id = $1",
+        [survivor[0].id],
+      );
+      expect(Number(rows[0].n)).toBeGreaterThan(0);
+    });
+  });
 });
 
 describe("the artifact is immutable", () => {

@@ -1,6 +1,13 @@
 # TODOS
 
-Deferred work, with enough context to pick up cold. Written during the
+Deferred work, with enough context to pick up cold.
+
+> **Phases 5, 6 and 7 shipped on `fix/eng-review-p0`.** Items 1-4 below are
+> largely addressed by that work: the register, merge, the s.5(2) queue and the
+> s.6(6) cessation queue all exist now, and bulk import refuses to auto-resolve a
+> duplicate. What remains genuinely open is listed under "Still open" at the end.
+> The one thing that cannot be built is Phase 8's layout model: it needs 50-100
+> reviewed scans and the corpus is at 0. The dashboard now shows that number. Written during the
 engineering review that produced the `fix/eng-review-p0` branch; the eighteen
 defects that branch closes are not listed here.
 
@@ -260,3 +267,41 @@ and is linked from the dashboard. Functional bug, not design — every DPO hits 
 - **`evidence.ts` and route-level tests.** Still at zero. Route testing needs a
   Next 16 App Router request-context harness that does not exist here yet; that
   scaffolding is the actual work.
+
+
+---
+
+## Still open after the phase work
+
+1. **Phase 8's layout model.** Blocked on data, not effort. OCR, tick-box
+   detection, the training export and the corpus counter are all built; the
+   model needs 50-100 reviewed scans. Watch the number on the dashboard. Do not
+   train early: a model fitted on under ten forms is confidently wrong, and a
+   confidently wrong pre-filled name is worse than an empty field because
+   reviewers stop checking things that are usually right.
+
+2. **Calibrate `INK_THRESHOLD`** (`ml/app/tickbox.py`). Still the synthetic
+   default. `ink_ratio` is stored on every reading in `intake_draft.extraction`;
+   join it against what the reviewer actually confirmed in `payload` and the
+   threshold falls out of real paper.
+
+3. **Local versus cloud OCR.** The engine registry exists so the two can be
+   compared on your own forms. The answer decides whether handwriting is
+   readable at all, and whether a vendor becomes a Data Processor under s.8(2).
+
+4. **Split identities can now be found and fixed, but not yet detected.** Merge
+   exists; nothing surfaces likely duplicates. A read-only report - contact
+   points shared across rows whose `name_key` differs by a small trigram
+   distance - would turn the register from a search tool into a worked queue.
+
+5. **The component drift from the design review.** 11 hand-rolled callouts with
+   `role="alert"` on the red ones only, `Panel`'s shell copied five times,
+   `OtpInput` reimplementing `Field`. Unchanged by the phase work, and the new
+   screens follow the same patterns, so the count has grown rather than shrunk.
+
+6. **Set-based `commitDraft`.** Now actually load-bearing: bulk import commits
+   row by row, and each row still does three round trips per purpose.
+
+7. **`libphonenumber-js`**, and the two dead dedup primitives
+   (`evidence_object_sha256_idx`, `payload_hash`) - still written, still never
+   read, and bulk import is exactly what would use them to spot a re-import.

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { AlertCircle, ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
+import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { OtpInput } from "@/components/otp-input";
@@ -28,6 +29,20 @@ interface Consent {
 }
 
 type Stage = "contact" | "code" | "choose" | "consents" | "done";
+
+/**
+ * Which consents are still running is the question this whole screen exists to
+ * answer, and it was previously answered in the same 12px grey as every other
+ * scrap of metadata on the card - so "Active" and "Withdrawn" were
+ * indistinguishable at a glance. Live consent is the state a person might want
+ * to act on, so it is the one that carries colour. Withdrawn and declined are
+ * both inert; the label tells them apart.
+ */
+const STATUS_TONE: Record<ConsentStatus, Tone> = {
+  active: "green",
+  withdrawn: "neutral",
+  declined: "neutral",
+};
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-IN", {
@@ -295,9 +310,9 @@ export function WithdrawClient() {
                       {consent.formLabel ? ` · ${consent.formLabel}` : ""}
                     </p>
                   </div>
-                  <span className="text-xs text-muted">
+                  <Badge tone={STATUS_TONE[consent.status]}>
                     {consentStatusLabels[consent.status]}
-                  </span>
+                  </Badge>
                 </div>
               </li>
             );

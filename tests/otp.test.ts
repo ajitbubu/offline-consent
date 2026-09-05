@@ -287,6 +287,33 @@ describe("verifyOtp", () => {
       }
     });
   });
+
+  it("rate limits verification per IP, a limit that could not previously fire", async () => {
+    // The old threshold compared challenge count against VERIFIES_PER_IP_PER_HOUR
+    // * 2 / MAX_ATTEMPTS, i.e. 12 - two above the ceiling of 10 that requestOtp
+    // itself enforces - so it was unreachable arithmetic. It now counts actual
+    // attempts from audit_log, which is where the verify route already records
+    // every otp_failed because that is evidence regardless.
+    await withRollback(async (client) => {
+      const ip = "203.0.113.42";
+      const phone = uniquePhone();
+      await makePerson(client, "Test Person", phone);
+      const { challengeId } = await issue(client, phone);
+
+      // A wrong code is still refused before the limit bites.
+      expect(await verifyOtp(challengeId, "000000", ip, client)).toEqual({ ok: false });
+
+      await client.query(
+        `INSERT INTO audit_log (action, actor_type, ip_address)
+         SELECT 'otp_failed', 'system', $1::inet FROM generate_series(1, 30)`,
+        [ip],
+      );
+
+      expect(await verifyOtp(challengeId, "000000", ip, client)).toEqual({ rateLimited: true });
+      // A different IP is unaffected: the limit is per caller, not global.
+      expect(await verifyOtp(challengeId, "000000", "198.51.100.9", client)).toEqual({ ok: false });
+    });
+  });
 });
 
 describe("claimPrincipal", () => {

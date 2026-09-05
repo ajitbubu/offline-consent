@@ -1,0 +1,65 @@
+# Enforces the definition of done from AGENTS.md on every push and PR.
+#
+# Both suites need real services rather than mocks: the TypeScript tests run
+# against Postgres with transaction-rollback isolation (tests/helpers/db.ts), and
+# the extraction tests shell out to tesseract. Faking either would test the fake.
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  web:
+    name: lint · typecheck · build · test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: offline_consent
+          POSTGRES_PASSWORD: offline_consent
+          POSTGRES_DB: offline_consent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U offline_consent -d offline_consent"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://offline_consent:offline_consent@localhost:5432/offline_consent
+      # Test values only. Both are length-validated by src/lib/env.ts at import
+      # time, so the suite cannot start without them.
+      JWT_SECRET: ci-only-secret-not-used-anywhere-real-0123456789
+      OTP_PEPPER: ci-only-pepper-not-real
+      APP_ORIGIN: http://localhost:1002
+      APP_TIMEZONE: Asia/Kolkata
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run migrate
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  ml:
+    name: extraction service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tesseract
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -q

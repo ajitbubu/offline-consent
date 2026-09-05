@@ -27,9 +27,16 @@ export function StaffNav({ role }: { role: StaffRole }) {
 
   return (
     <header className="border-b border-line bg-panel">
-      <div className="mx-auto flex w-full max-w-6xl items-center gap-6 px-6">
-        <span className="py-4 text-sm font-semibold text-ink">Consent register</span>
-        <nav className="flex flex-1 items-center gap-1">
+      {/*
+        The nav has no breakpoint of its own, so wordmark + four icon links +
+        role + sign-out pushed the document to 675px wide inside a 375px
+        viewport and the whole console scrolled sideways on a phone.
+        overflow-x-auto contains it, shrink-0 stops the wordmark collapsing, and
+        the link labels drop below sm so the icons still identify each one.
+      */}
+      <div className="mx-auto flex w-full max-w-6xl items-center gap-4 overflow-x-auto px-6 sm:gap-6">
+        <span className="shrink-0 py-4 text-sm font-semibold text-ink">Consent register</span>
+        <nav aria-label="Staff sections" className="flex flex-1 items-center gap-1">
           {LINKS.filter((l) => roleAtLeast(role, l.minimum)).map((link) => {
             const active =
               link.href === "/staff"
@@ -41,22 +48,25 @@ export function StaffNav({ role }: { role: StaffRole }) {
                 key={link.href}
                 href={link.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex items-center gap-2 border-b-2 px-3 py-4 text-sm ${
+                className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-4 text-sm ${
                   active
                     ? "border-navy font-medium text-ink"
                     : "border-transparent text-muted hover:text-ink"
                 }`}
               >
                 <Icon size={15} aria-hidden />
-                {link.label}
+                <span className="hidden sm:inline">{link.label}</span>
+                <span className="sr-only sm:hidden">{link.label}</span>
               </Link>
             );
           })}
         </nav>
-        <span className="text-xs text-muted">{staffRoleLabels[role]}</span>
+        <span className="hidden shrink-0 text-xs text-muted sm:inline">
+          {staffRoleLabels[role]}
+        </span>
         <button
           onClick={signOut}
-          className="flex items-center gap-1.5 text-sm text-muted hover:text-ink"
+          className="flex shrink-0 items-center gap-1.5 text-sm text-muted hover:text-ink"
         >
           <LogOut size={15} aria-hidden />
           Sign out

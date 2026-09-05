@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { FileText, Inbox, LayoutDashboard, LogOut, Users } from "lucide-react";
+import { BellRing, FileText, Inbox, LayoutDashboard, LogOut, OctagonX, Users } from "lucide-react";
 import { roleAtLeast, staffRoleLabels, type StaffRole } from "@/lib/consent";
 
 const LINKS = [
@@ -10,6 +10,8 @@ const LINKS = [
   { href: "/staff/intake/new", label: "New form", icon: FileText, minimum: "operator" },
   { href: "/staff/review", label: "Review queue", icon: Inbox, minimum: "operator" },
   { href: "/staff/principals", label: "Register", icon: Users, minimum: "dpo" },
+  { href: "/staff/notices", label: "Notices owed", icon: BellRing, minimum: "dpo" },
+  { href: "/staff/cessation", label: "Stop processing", icon: OctagonX, minimum: "dpo" },
 ] as const;
 
 export function StaffNav({ role }: { role: StaffRole }) {

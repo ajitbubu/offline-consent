@@ -52,6 +52,18 @@ const PURPOSES = [
   },
 ];
 
+/**
+ * Where personal data actually goes. The s.6(6) checklist is only as honest as
+ * this list is complete, so it ships with the obvious ones rather than empty -
+ * an empty registry silently makes every withdrawal look fully honoured.
+ */
+const SYSTEMS = [
+  ["crm", "Membership CRM", "Primary member database and contact history.", "ops@example.org", 3],
+  ["mailer", "Email marketing platform", "Newsletter and campaign sends.", "marketing@example.org", 2],
+  ["sms", "SMS gateway", "Transactional and promotional SMS.", "marketing@example.org", 2],
+  ["warehouse", "Analytics warehouse", "Reporting copies of member data.", "data@example.org", 14],
+];
+
 const NOTICE = {
   code: "membership-form",
   version: 3,
@@ -129,6 +141,15 @@ async function main() {
            SET printed_label = EXCLUDED.printed_label,
                display_order = EXCLUDED.display_order`,
         [noticeId, code, printedLabel, order],
+      );
+    }
+
+    for (const [code, name, description, owner, sla] of SYSTEMS) {
+      await client.query(
+        `INSERT INTO downstream_system (code, name, description, owner_contact, sla_days)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (code) DO NOTHING`,
+        [code, name, description, owner, sla],
       );
     }
 

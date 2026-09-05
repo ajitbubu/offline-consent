@@ -9,6 +9,9 @@
  *    consent was validly obtained in the first place.
  *  - It does not fail when the consent is already withdrawn. A repeated request
  *    is a person insisting, not an error.
+ *  - It does not stop at our own database. Each purpose actually withdrawn
+ *    raises a cessation task per active downstream system, so s.6(6) is a worked
+ *    queue rather than an intention.
  *  - It does not report success it did not achieve. Every branch returns an
  *    outcome and writes an audit entry, including the one where there is no
  *    record to withdraw, and the portal renders what came back rather than
@@ -18,6 +21,7 @@
  */
 import "server-only";
 import { writeAudit } from "@/lib/audit";
+import { raiseCessationTasks } from "@/lib/cessation";
 import type { Executor } from "@/lib/db";
 import type { WithdrawalChannel } from "@/lib/consent";
 
@@ -149,6 +153,14 @@ export async function withdrawPurposes(
       withdrawnOn: updated[0].withdrawn_at.toISOString(),
     });
   }
+
+  // s.6(6): stopping is not just changing our own row. Every active downstream
+  // system that holds this person's data gets a task, raised in the same
+  // transaction as the withdrawal - a withdrawal recorded without its
+  // obligations is exactly the gap this closes. Only purposes that actually
+  // changed raise one; a person insisting is not a second obligation.
+  const changed = outcomes.filter((o) => o.changed).map((o) => o.purposeId);
+  await raiseCessationTasks(input.principalId, changed, client);
 
   return outcomes;
 }

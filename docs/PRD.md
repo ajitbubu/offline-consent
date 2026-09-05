@@ -199,7 +199,7 @@ permanently blocks a statutory right.
 | FR-12 | Forms with no notice at collection accumulate a worked s.5(2) queue with delivery recorded per person. | Built |
 | FR-13 | A withdrawal raises a cessation task per registered downstream system, with a stored due date and a legal-hold state for the statutory carve-out. | Built |
 | FR-14 | A DPO can search the register and see, for one person, every artifact, current consent, and the full audit trail. | Built |
-| FR-15 | A CSV of already-digitised records imports with column mapping and a per-row validation report; each row commits in its own transaction. | Planned |
+| FR-15 | A CSV of already-digitised records imports with column mapping and a per-row validation report; each row commits in its own transaction. | Built |
 | FR-16 | A tablet at the counter captures a drawn signature and reaches the same review-and-commit step, resetting after 90 s idle. | Planned |
 | FR-17 | Scanned fields are extracted by a trained model, not an LLM: OCR tokens + layout classification for text, ink-density detection for tick-boxes. Every field remains human-confirmed. Labels derive from committed drafts, so the review screen doubles as the annotation tool. | Planned |
 
@@ -277,8 +277,8 @@ The product does its whole job today: paper in, withdrawal out.
 | 2 | Staff authentication, roles, console shell | Shipped |
 | 3 | Evidence storage, manual and scanned intake, review, commit | Shipped |
 | 4 | Public withdrawal portal, one-time codes, notice pages | Shipped |
-| 5 | Bulk CSV import with column mapping and per-row report | Next |
-| 6 | Kiosk capture with drawn signature | Planned |
+| 5 | Bulk CSV import with column mapping and per-row report | Shipped |
+| 6 | Kiosk capture with drawn signature | Next |
 | 7 | DPO surfaces: register search, notice queue, cessation, merge | Shipped |
 | 8 | Extraction service: OCR, tick-box detection, layout model | Planned |
 

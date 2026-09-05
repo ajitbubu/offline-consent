@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BellRing, FileText, Inbox, LayoutDashboard, LogOut, OctagonX, Users } from "lucide-react";
+import { BellRing, FileText, Inbox, LayoutDashboard, LogOut, OctagonX, Upload, Users } from "lucide-react";
 import { roleAtLeast, staffRoleLabels, type StaffRole } from "@/lib/consent";
 
 const LINKS = [
   { href: "/staff", label: "Overview", icon: LayoutDashboard, minimum: "operator" },
   { href: "/staff/intake/new", label: "New form", icon: FileText, minimum: "operator" },
   { href: "/staff/review", label: "Review queue", icon: Inbox, minimum: "operator" },
+  { href: "/staff/import", label: "Bulk import", icon: Upload, minimum: "dpo" },
   { href: "/staff/principals", label: "Register", icon: Users, minimum: "dpo" },
   { href: "/staff/notices", label: "Notices owed", icon: BellRing, minimum: "dpo" },
   { href: "/staff/cessation", label: "Stop processing", icon: OctagonX, minimum: "dpo" },

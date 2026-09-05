@@ -201,7 +201,7 @@ permanently blocks a statutory right.
 | FR-14 | A DPO can search the register and see, for one person, every artifact, current consent, and the full audit trail. | Built |
 | FR-15 | A CSV of already-digitised records imports with column mapping and a per-row validation report; each row commits in its own transaction. | Built |
 | FR-16 | A tablet at the counter captures a drawn signature and reaches the same review-and-commit step, resetting after 90 s idle. | Built |
-| FR-17 | Scanned fields are extracted by a trained model, not an LLM: OCR tokens + layout classification for text, ink-density detection for tick-boxes. Every field remains human-confirmed. Labels derive from committed drafts, so the review screen doubles as the annotation tool. | Planned |
+| FR-17 | Scanned fields are extracted by a trained model, not an LLM: OCR tokens + layout classification for text, ink-density detection for tick-boxes. Every field remains human-confirmed. Labels derive from committed drafts, so the review screen doubles as the annotation tool. | Partial — OCR, tick-box detection and the training export are built; the layout model needs a corpus that does not exist yet |
 
 ## 9. Security, privacy and non-functional requirements
 

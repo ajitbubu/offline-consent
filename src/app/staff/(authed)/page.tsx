@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireStaff } from "@/lib/auth";
 import { Panel } from "@/components/ui/panel";
 import { roleAtLeast } from "@/lib/consent";
+import { corpusStatus } from "@/lib/training";
 
 export const metadata: Metadata = { title: "Overview" };
 
@@ -68,7 +69,7 @@ function Stat({
 
 export default async function StaffOverviewPage() {
   const staff = await requireStaff();
-  const counts = await loadCounts();
+  const [counts, corpus] = await Promise.all([loadCounts(), corpusStatus()]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -96,6 +97,7 @@ export default async function StaffOverviewPage() {
           label="Notices owed"
           value={counts.notices_owed}
           hint="s.5(2) — no notice at collection"
+          href={roleAtLeast(staff.role, "dpo") ? "/staff/notices" : undefined}
         />
       </dl>
 
@@ -128,6 +130,18 @@ export default async function StaffOverviewPage() {
             </li>
           )}
         </ol>
+        {roleAtLeast(staff.role, "dpo") && (
+          <p className="mt-4 rounded-md bg-canvas px-3 py-2 text-sm text-muted">
+            Extraction corpus: <strong className="text-ink">{corpus.pairs}</strong> of{" "}
+            {corpus.target} scans needed before a text model is worth training.{" "}
+            {corpus.ready
+              ? "Enough to try."
+              : corpus.missedPairs > 0
+                ? `${corpus.missedPairs} committed scan${corpus.missedPairs === 1 ? " carries" : "s carry"} no OCR tokens — ${corpus.missedPairs === 1 ? "that pair is" : "those pairs are"} gone. Set ML_SERVICE_URL so the rest are banked.`
+                : "Every scan reviewed without the extraction service running is a pair lost for good."}
+          </p>
+        )}
+
         {counts.undated_forms !== "0" && (
           <p className="mt-4 rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
             {counts.undated_forms} artifact{counts.undated_forms === "1" ? " is" : "s are"} recorded

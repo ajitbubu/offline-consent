@@ -296,7 +296,7 @@ export function WithdrawClient() {
                       id={`c-${consent.purposeId}`}
                       type="checkbox"
                       checked={checked}
-                      className="mt-1 size-4 accent-[var(--navy)]"
+                      className="mt-0.5 size-5 accent-[var(--navy)]"
                       onChange={(e) =>
                         setSelected((prev) => {
                           const next = new Set(prev);
@@ -310,7 +310,9 @@ export function WithdrawClient() {
                   <div className="flex-1">
                     <label
                       htmlFor={withdrawable ? `c-${consent.purposeId}` : undefined}
-                      className="block text-sm font-medium text-ink"
+                      // Negative margin keeps the layout identical while giving
+                      // the label a taller hit area than its 20px text box.
+                      className={`block text-sm font-medium text-ink ${withdrawable ? "-my-2 cursor-pointer py-2" : ""}`}
                     >
                       {consent.name}
                     </label>

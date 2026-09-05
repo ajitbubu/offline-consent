@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, FileWarning, Info, Upload } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import { Panel } from "@/components/ui/panel";
@@ -509,9 +510,15 @@ export function DraftForm({
                         </span>
                       )}
                     </label>
-                    <span className="text-xs text-muted">
+                    {/*
+                      Same grey as the OCR-confidence note two lines above, so
+                      the reviewer confirming ticks against paper had the
+                      weakest state affordance in the app. Mirrors STATUS_TONE
+                      in the portal: the affirmative state carries the colour.
+                    */}
+                    <Badge tone={item.granted ? "green" : "neutral"}>
                       {item.granted ? "Agreed" : "Not agreed"}
-                    </span>
+                    </Badge>
                   </li>
                 );
               })}

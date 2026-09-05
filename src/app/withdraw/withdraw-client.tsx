@@ -7,6 +7,7 @@ import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { OtpInput } from "@/components/otp-input";
+import { normaliseEmail, normalisePhone } from "@/lib/phone";
 import { consentStatusLabels, type ConsentStatus } from "@/lib/consent";
 
 interface WithdrawOutcome {
@@ -89,6 +90,26 @@ export function WithdrawClient() {
   }
 
   async function requestCode() {
+    // Refuse a destination that could not receive a code no matter who it
+    // belonged to.
+    //
+    // The server answers identically whether or not a destination is in the
+    // register, which is the right call - but it meant a mistyped number went
+    // straight to "we have just sent you a code" and the person then waited for
+    // a code that was never sent, because normalisePhone had rejected it and no
+    // challenge was ever written. A nine-digit typo is the common case.
+    //
+    // Checking the SHAPE here leaks nothing: whether a string looks like a phone
+    // number or an email is independent of whether it is on the register, so the
+    // anti-enumeration property is untouched. Uses the same normalisers the
+    // server uses, so the two cannot disagree about what is reachable.
+    if (normalisePhone(destination) === null && normaliseEmail(destination) === null) {
+      setError(
+        "That does not look like a mobile number or an email address. Check it against the form you signed.",
+      );
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {

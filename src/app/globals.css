@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Tokens.
+
+   A deliberately single, light palette. This is a compliance register: it is
+   read by operators under office lighting and by members on their phones, and
+   a second theme is surface area with no reader asking for it. Backgrounds are
+   painted explicitly rather than inherited.
+--------------------------------------------------------------------------- */
+:root {
+  --ink: #14181f;
+  --muted: #5b6472;
+  --line: #dfe3e9;
+  --panel: #ffffff;
+  --canvas: #f6f7f9;
+
+  --navy: #16233c;
+  --blue: #1f57c3;
+  --blue-soft: #eaf0fc;
+  --green: #176b3f;
+  --green-soft: #e7f4ec;
+  --red: #b3261e;
+  --red-soft: #fbeceb;
+  --amber: #8a5a00;
+  --amber-soft: #fdf2dc;
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-panel: var(--panel);
+  --color-canvas: var(--canvas);
+
+  --color-navy: var(--navy);
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-green: var(--green);
+  --color-green-soft: var(--green-soft);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+/* Never let a focus ring be invisible: this app is used all day by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* Numbers that must line up in a column: phone numbers, dates, hashes. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,23 @@
+# Local development database. Production is out of scope for this compose file.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: offline-consent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: offline_consent
+      POSTGRES_PASSWORD: offline_consent
+      POSTGRES_DB: offline_consent
+    ports:
+      # 5433 on the host so this never collides with a system Postgres on 5432.
+      - "5433:5432"
+    volumes:
+      - offline_consent_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U offline_consent -d offline_consent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  offline_consent_pgdata:

@@ -116,6 +116,80 @@ export const datePrecisionLabels: Record<DatePrecision, string> = {
 };
 
 /* -------------------------------------------------------------------------- */
+/* Extraction                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Shapes stored in intake_draft.ocr_tokens and intake_draft.extraction.
+ *
+ * They live here rather than in extraction.ts because the review screen is a
+ * client component and extraction.ts is server-only - and because the review
+ * screen IS the annotation tool, so these types are read on both sides.
+ *
+ * Bumped when the stored shape changes, so an old blob stays readable.
+ */
+export const EXTRACTION_SCHEMA_VERSION = 1;
+
+export interface OcrToken {
+  text: string;
+  /** [x0, y0, x1, y1], top-left origin, in this page's pixel space. */
+  bbox: [number, number, number, number];
+  confidence: number;
+}
+
+export interface OcrPage {
+  page: number;
+  width: number;
+  height: number;
+  tokens: OcrToken[];
+}
+
+/**
+ * Self-describing on purpose: page dimensions travel with the tokens expressed
+ * in them, because a bbox means nothing without its coordinate space and
+ * evidence_object records no geometry.
+ */
+export interface OcrTokens {
+  schemaVersion: number;
+  engine: string;
+  engineVersion: string;
+  capturedAt: string;
+  pages: OcrPage[];
+}
+
+export interface TickBoxReading {
+  purposeId: string;
+  /**
+   * null means the printed label could not be found on the scan at all, which
+   * is NOT the same as finding the box and seeing it empty. Collapsing the two
+   * would turn a failed match into a recorded refusal.
+   */
+  granted: boolean | null;
+  confidence: number;
+  anchorScore: number;
+  inkRatio: number | null;
+  page: number | null;
+  bbox: [number, number, number, number] | null;
+}
+
+/** What the service proposed. Never committed; a human moves it into payload. */
+export interface Extraction {
+  schemaVersion: number;
+  engine: string;
+  engineVersion: string;
+  extractedAt: string;
+  tickboxes: TickBoxReading[];
+}
+
+/**
+ * Below this, a reading is shown to the reviewer but never pre-fills a box.
+ * A wrong pre-fill is worse than an empty one: reviewers stop checking things
+ * that are usually right, and this is the field that decides whether an
+ * organisation may process someone's data.
+ */
+export const PREFILL_MIN_CONFIDENCE = 0.7;
+
+/* -------------------------------------------------------------------------- */
 /* Staff roles                                                                */
 /* -------------------------------------------------------------------------- */
 

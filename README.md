@@ -18,6 +18,12 @@ and withdraw consent per purpose.
 docker compose up -d && npm install && npm run migrate && npm run seed && npm run dev
 ```
 
+Extraction (`./ml`, OCR and tick-box reading) is optional and comes up with
+`docker compose up -d`. Point `ML_SERVICE_URL` at it to start banking OCR
+tokens; leave it unset and the review screen is plain manual entry. See
+[`ml/README.md`](ml/README.md) — and note that a scan reviewed without it
+running is a training pair lost for good.
+
 The seed prints an administrator password once. The app runs on
 <http://localhost:1002>.
 
@@ -28,7 +34,8 @@ The seed prints an administrator password once. The app runs on
 | `/notice/:code/:version` | Public, versioned notice text |
 | `/staff/login` → `/staff` | Operator and DPO screens |
 
-Checks: `npm run lint && npm run typecheck && npm run build && npm test`
+Checks: `npm run lint && npm run typecheck && npm run build && npm test`,
+and `cd ml && uv run pytest` for the extraction service.
 
 ## How it fits together
 
@@ -47,6 +54,19 @@ When someone withdraws, "granted" must both **change** (so processing stops) and
 **not change** (so you can still prove consent was validly obtained on 4 March
 2019). Those are different rows. A correction is a **new artifact**, never an
 `UPDATE`.
+
+### Extraction proposes, a human disposes
+
+The `ml/` service reads a scan and writes what it found to
+`intake_draft.extraction`. It never touches `payload`, and `commitDraft()` reads
+`payload` alone — so a value becomes consent only when a reviewer moves it
+across. The service is also told nothing it could use to name a purpose: labels
+go over the wire as an ordered list and come back by index.
+
+That arrangement is also what solves the cold start. The review screen already
+shows the scan beside the form, so every committed draft pairs OCR tokens with a
+human-verified payload, and that pair is the training set for the text model
+that does not exist yet.
 
 ### One intake pipeline
 

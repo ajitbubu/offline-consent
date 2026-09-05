@@ -11,6 +11,10 @@ const schema = z.object({
   evidenceId: z.string().uuid().nullable().default(null),
   signatureEvidenceId: z.string().uuid().nullable().default(null),
   ocrTokens: z.unknown().nullable().default(null),
+  // The service's own proposal, kept beside the payload the human confirmed.
+  // commitDraft never reads it; the difference between the two is how extraction
+  // quality gets measured, and later how the model gets retrained.
+  extraction: z.unknown().nullable().default(null),
 });
 
 export async function POST(request: Request) {
@@ -26,8 +30,8 @@ export async function POST(request: Request) {
     const { rows } = await query<{ id: string }>(
       `INSERT INTO intake_draft
          (source, payload, evidence_id, signature_evidence_id, ocr_tokens,
-          matched_principal_id, match_reason, validation, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          extraction, matched_principal_id, match_reason, validation, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
       [
         body.source,
@@ -35,6 +39,7 @@ export async function POST(request: Request) {
         body.evidenceId,
         body.signatureEvidenceId,
         body.ocrTokens === null ? null : JSON.stringify(body.ocrTokens),
+        body.extraction === null ? null : JSON.stringify(body.extraction),
         exact?.principalId ?? null,
         exact ? exact.reason : "none",
         JSON.stringify(issues),

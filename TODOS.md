@@ -152,7 +152,50 @@ expressible.
 
 ---
 
-## 6. Smaller items
+## 6. Text-field extraction, once the corpus exists
+
+**What.** Layout classification for the handwritten fields — name, phone, date.
+
+**Why it deferred.** It needs roughly 50–100 reviewed scans and there were none,
+because `ocr_tokens` was never written. Token capture now runs on every scan
+upload, so the corpus accumulates from here; `intake_draft_trainable_idx`
+already indexes exactly the rows to export (`status = 'committed' AND ocr_tokens
+IS NOT NULL`).
+
+**Where to start.** A training-export job over that index, and a count. Do not
+train until the count is real: a model fitted on under ten forms will be
+confidently wrong, and a confidently wrong pre-filled name is worse than an
+empty field because reviewers stop checking things that are usually right.
+
+**Also waiting on this.** The local-versus-cloud engine choice
+(`ml/app/engines/`). Both sit behind one interface so they can be compared on
+your own forms; the answer decides whether handwriting is readable at all, and
+whether a vendor becomes a Data Processor under s.8(2).
+
+**Depends on.** Token capture running in production for long enough to bank a
+corpus. **Blocks.** Nothing.
+
+---
+
+## 7. Calibrate the tick-box ink threshold
+
+**What.** `INK_THRESHOLD` in `ml/app/tickbox.py` is a starting value, not a
+tuned one.
+
+**Why it matters.** It separates cleanly on synthetic forms (0.00 empty versus
+0.56 ticked). Real scans are messier: a faint pencil tick on a heavy scan sits
+much closer to an empty box with a dark border, and the failure is silent in
+both directions.
+
+**Where to start.** `ink_ratio` is returned on every reading and stored in
+`intake_draft.extraction`. Once real scans have been through, compare the stored
+`ink_ratio` against what the reviewer actually confirmed in `payload` — that
+join gives the threshold directly, and it also gives a standing measure of
+extraction quality.
+
+---
+
+## 8. Smaller items
 
 - **`libphonenumber-js` for `src/lib/phone.ts`.** `normalisePhone` accepts any
   `+`-prefixed E.164-shaped string with no country validation

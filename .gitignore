@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the template. `.env*` was swallowing it, so the file README tells
+# you to copy was not in the repository at all.
+!.env.example
 
 # vercel
 .vercel
@@ -43,6 +46,12 @@ next-env.d.ts
 # offline-consent
 .env
 .evidence/
+
+# ml/ extraction service
 ml/.venv/
 ml/models/
 ml/data/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

@@ -25,6 +25,15 @@ const schema = z.object({
   // Compared against the Origin header on every mutating staff route.
   APP_ORIGIN: z.string().url().default("http://localhost:1002"),
 
+  // The Data Fiduciary's name, shown on every public page.
+  //
+  // A person who signed a paper form needs to know WHOSE consent register they
+  // have landed on before they type a phone number into it, and s.5(1)(iii)
+  // wants the Fiduciary reachable. consent_notice.fiduciary_contact carries a
+  // contact blob per notice version, which is the wrong shape and the wrong
+  // scope for a page header - the organisation is a property of the deployment.
+  ORG_NAME: z.string().min(1).default("Consent register"),
+
   // The civil timezone this register operates in.
   //
   // A consent date is a date off a piece of paper: it has no time and no zone.

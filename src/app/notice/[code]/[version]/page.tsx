@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { PublicShell } from "@/components/public-shell";
 import { query } from "@/lib/db";
 
 interface NoticeRow {
@@ -63,7 +64,7 @@ export default async function NoticePage({
   if (!notice) notFound();
 
   return (
-    <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-12">
+    <PublicShell>
       <p className="text-sm text-muted">{notice.form_label}</p>
       <h1 className="mt-1 text-xl font-semibold text-ink">{notice.title}</h1>
 
@@ -96,6 +97,6 @@ export default async function NoticePage({
       <p className="mt-10 rounded-md bg-canvas px-4 py-3 text-sm text-muted">
         Questions or complaints: {notice.fiduciary_contact}
       </p>
-    </main>
+    </PublicShell>
   );
 }

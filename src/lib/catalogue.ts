@@ -57,3 +57,23 @@ export async function loadNotices(): Promise<NoticeSummary[]> {
   );
   return rows;
 }
+
+/**
+ * The grievance contact for the public footer.
+ *
+ * Taken from the most recently published notice: s.5(1)(iii) requires a way to
+ * reach the Data Protection Officer, and the notice is where that text is
+ * already maintained, so the footer cannot drift from what the notices say.
+ * Null when nothing is published yet, and the footer then omits the line rather
+ * than inventing one.
+ */
+export async function latestFiduciaryContact(): Promise<string | null> {
+  const { rows } = await query<{ fiduciary_contact: string }>(
+    `SELECT fiduciary_contact
+       FROM consent_notice
+      WHERE published_at IS NOT NULL
+      ORDER BY published_at DESC
+      LIMIT 1`,
+  );
+  return rows[0]?.fiduciary_contact ?? null;
+}

@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { PublicShell } from "@/components/public-shell";
 
 export default function HomePage() {
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-20">
-      <h1 className="text-2xl font-semibold text-ink">
+    <PublicShell>
+      <h1 className="text-xl font-semibold text-ink">
         Manage the consent you gave us on paper
       </h1>
       <p className="mt-3 text-ink">
@@ -28,6 +29,6 @@ export default function HomePage() {
         </Link>
         .
       </p>
-    </main>
+    </PublicShell>
   );
 }

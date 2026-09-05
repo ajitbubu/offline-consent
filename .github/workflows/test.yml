@@ -35,6 +35,12 @@ jobs:
       OTP_PEPPER: ci-only-pepper-not-real
       APP_ORIGIN: http://localhost:1002
       APP_TIMEZONE: Asia/Kolkata
+      # The OTP suite reads the issued code back through requestOtp's devCode,
+      # which is only populated when this is on. There is no SMS provider in CI
+      # and the code is bcrypt-hashed in the row, so there is no other way to
+      # learn it. env.ts refuses this in production, and NODE_ENV is not
+      # production here.
+      OTP_DEV_ECHO: "true"
 
     steps:
       - uses: actions/checkout@v4

@@ -110,7 +110,17 @@ export default async function CessationPage({
                 </p>
                 {t.hold_reason && (
                   <p className="mt-1 rounded-md bg-amber-soft px-2 py-1 text-xs text-amber">
-                    Held: {t.hold_reason}
+                    {/* s.6(6) permits continued processing only where the Act
+                        requires it, so this is a legal claim. The database makes
+                        the person mandatory; showing them is the other half. */}
+                    Held by {t.decided_by ?? "an unknown staff member"}: {t.hold_reason}
+                  </p>
+                )}
+                {t.status === "completed" && (
+                  <p className="mt-1 text-xs text-muted">
+                    Stopped by {t.decided_by ?? "an unknown staff member"}
+                    {t.decided_at ? ` on ${when(t.decided_at)}` : ""}
+                    {t.completion_note ? ` — ${t.completion_note}` : ""}
                   </p>
                 )}
               </div>

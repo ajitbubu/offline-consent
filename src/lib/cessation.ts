@@ -29,6 +29,10 @@ export interface CessationTaskRow {
   due_at: Date;
   status: "open" | "completed" | "on_hold";
   hold_reason: string | null;
+  /** Who asserted the carve-out, or who recorded the stop. A claim needs a name. */
+  decided_by: string | null;
+  decided_at: Date | null;
+  completion_note: string | null;
   overdue: boolean;
 }
 
@@ -77,11 +81,16 @@ export async function loadTasks(
             t.due_at,
             t.status,
             t.hold_reason,
+            t.completion_note,
+            COALESCE(hb.full_name, cb.full_name) AS decided_by,
+            t.completed_at                       AS decided_at,
             (t.status = 'open' AND t.due_at < now()) AS overdue
        FROM cessation_task t
        JOIN data_principal d    ON d.id = t.data_principal_id
        JOIN purpose p           ON p.id = t.purpose_id
        JOIN downstream_system s ON s.id = t.system_id
+       LEFT JOIN staff_user hb  ON hb.id = t.held_by
+       LEFT JOIN staff_user cb  ON cb.id = t.completed_by
       WHERE t.status = $1
       ORDER BY t.due_at
       LIMIT 300`,

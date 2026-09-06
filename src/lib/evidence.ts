@@ -96,6 +96,25 @@ export async function putEvidence(
   const storageKey = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${randomUUID()}`;
   const sha256 = createHash("sha256").update(bytes).digest("hex");
 
+  // The same bytes are the same file. evidence_object_sha256_idx has existed
+  // since migration 004, commented "Detects a re-upload of a form already on
+  // file", and nothing read it - so re-uploading a scan wrote the bytes to disk
+  // again under a new key, and eighteen rows in this database are byte-identical
+  // copies of each other. Reuse rather than duplicate: the retention date stays
+  // the one stamped when the bytes were first held, which is when the clock
+  // actually started.
+  //
+  // A destroyed object is not reused. Its row survives as the record that the
+  // evidence existed and was destroyed, but the bytes are gone.
+  const { rows: identical } = await executor.query<EvidenceObject>(
+    `SELECT id, storage_key, kind, content_type, original_filename, byte_size, sha256
+       FROM evidence_object
+      WHERE sha256 = $1 AND kind = $2 AND deleted_at IS NULL
+      LIMIT 1`,
+    [sha256, meta.kind],
+  );
+  if (identical.length > 0) return identical[0];
+
   // Retention is stamped now and stored, so that changing
   // EVIDENCE_RETENTION_YEARS later can never move the retention date of
   // something already held.

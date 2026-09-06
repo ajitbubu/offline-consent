@@ -15,6 +15,7 @@ const STATUS: Record<string, number> = {
   draft_not_reviewable: 409,
   validation_failed: 400,
   possible_duplicate: 409,
+  already_recorded: 409,
 };
 
 /**

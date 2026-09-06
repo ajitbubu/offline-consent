@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PoolClient } from "pg";
 import { buildDrafts, commitBatch, parseCsv } from "@/lib/bulk";
+import { commitDraft } from "@/lib/intake";
 import { pool } from "@/lib/db";
 import { seedFixture, withRollback, type Fixture } from "./helpers/db";
 
@@ -251,5 +252,47 @@ describe("commitBatch", () => {
       // Everything reachable is cleaned up; CI gets a fresh database anyway.
       await pool.query("DELETE FROM intake_draft WHERE batch_id = $1", [batchId]);
     }
+  });
+});
+
+describe("re-importing the same CSV", () => {
+  it("does not give one person two identical artifacts", async () => {
+    // The gap that shipped with Phase 5: nothing read payload_hash, so running
+    // the same import twice quietly doubled the evidence.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const csv = "Name,Mobile,Signed,Newsletter\nRepeat Person,9876577001,2019-03-04,yes";
+
+      const first = await batch(client, fx);
+      await buildDrafts(
+        { batchId: first, text: csv, mapping: MAPPING, noticeId: fx.noticeId, staffId: fx.staffId, purposes: purposesOf(fx) },
+        client,
+      );
+      const { rows: d1 } = await client.query<{ id: string }>(
+        "SELECT id FROM intake_draft WHERE batch_id = $1",
+        [first],
+      );
+      const committed = await commitDraft({ draftId: d1[0].id, staffId: fx.staffId }, client);
+
+      const second = await batch(client, fx);
+      await buildDrafts(
+        { batchId: second, text: csv, mapping: MAPPING, noticeId: fx.noticeId, staffId: fx.staffId, purposes: purposesOf(fx) },
+        client,
+      );
+      const { rows: d2 } = await client.query<{ id: string }>(
+        "SELECT id FROM intake_draft WHERE batch_id = $1",
+        [second],
+      );
+
+      await expect(
+        commitDraft({ draftId: d2[0].id, staffId: fx.staffId }, client),
+      ).rejects.toMatchObject({ code: "already_recorded" });
+
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_artifact WHERE data_principal_id = $1",
+        [committed.dataPrincipalId],
+      );
+      expect(Number(rows[0].n)).toBe(1);
+    });
   });
 });

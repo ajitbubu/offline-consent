@@ -291,8 +291,17 @@ describe("commitDraft", () => {
         [first.dataPrincipalId, fx.purposeIds[0]],
       );
 
+      // A DIFFERENT form carrying the same date. Byte-identical resubmission is a
+      // double import and is refused by the payload_hash guard, so the rule under
+      // test here needs two genuinely distinct forms.
       const second = await commitDraft(
-        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        {
+          draftId: await insertDraft(client, fx, {
+            collectedOn: "2024-03-04",
+            granted: [true, false, true],
+          }),
+          staffId: fx.staffId,
+        },
         client,
       );
 
@@ -331,7 +340,13 @@ describe("commitDraft", () => {
       );
 
       const second = await commitDraft(
-        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        {
+          draftId: await insertDraft(client, fx, {
+            collectedOn: "2024-03-04",
+            granted: [true, false, true],
+          }),
+          staffId: fx.staffId,
+        },
         client,
       );
       expect(second.withheldPurposeIds).toContain(fx.purposeIds[0]);
@@ -480,6 +495,58 @@ describe("commitDraft", () => {
         [survivor[0].id],
       );
       expect(Number(rows[0].n)).toBeGreaterThan(0);
+    });
+  });
+
+  it("refuses a form already recorded byte for byte against this person", async () => {
+    // payload_hash existed from migration 005 and nothing read it, so importing
+    // the same CSV twice gave one person two identical artifacts. Artifacts are
+    // append-only, so a duplicate cannot be tidied away - it sits in the evidence
+    // record forever and a DPO cannot tell one form counted twice from two forms.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+        client,
+      );
+
+      await expect(
+        commitDraft(
+          { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+          client,
+        ),
+      ).rejects.toMatchObject({ code: "already_recorded" });
+
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_artifact WHERE data_principal_id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(Number(rows[0].n)).toBe(1);
+    });
+  });
+
+  it("still accepts a genuinely different form for the same person", async () => {
+    // The guard is on identical content, not on the person. A later form with
+    // different answers is exactly how a correction is recorded.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { collectedOn: "2021-08-08", granted: [false, true, true] }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_artifact WHERE data_principal_id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(Number(rows[0].n)).toBe(2);
     });
   });
 });

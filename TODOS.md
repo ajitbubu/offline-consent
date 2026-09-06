@@ -302,6 +302,11 @@ and is linked from the dashboard. Functional bug, not design — every DPO hits 
 6. **Set-based `commitDraft`.** Now actually load-bearing: bulk import commits
    row by row, and each row still does three round trips per purpose.
 
-7. **`libphonenumber-js`**, and the two dead dedup primitives
-   (`evidence_object_sha256_idx`, `payload_hash`) - still written, still never
-   read, and bulk import is exactly what would use them to spot a re-import.
+7. **`libphonenumber-js`** for `src/lib/phone.ts`. `normalisePhone` still
+   accepts any `+`-prefixed E.164-shaped string with no country validation.
+
+~~The two dead dedup primitives~~ are now wired: `payload_hash` refuses an
+artifact identical to one already on file for that person, and
+`evidence_object_sha256_idx` makes a re-uploaded file reuse the existing row
+instead of writing the bytes again. Both were found by re-importing the same CSV
+and watching the evidence quietly double.

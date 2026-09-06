@@ -295,7 +295,8 @@ export type CommitErrorCode =
   | "draft_not_found"
   | "draft_not_reviewable"
   | "validation_failed"
-  | "possible_duplicate";
+  | "possible_duplicate"
+  | "already_recorded";
 
 export class CommitError extends Error {
   constructor(
@@ -517,6 +518,34 @@ export async function commitDraft(
       }),
     )
     .digest("hex");
+
+  // Has this exact form already been recorded for this person?
+  //
+  // payload_hash has existed since migration 005, described as deterministic so
+  // the same content always hashes to the same digest, and nothing has ever read
+  // it back. The cost of that showed up the first time a CSV was imported twice:
+  // the same person acquired two byte-identical artifacts and nothing noticed.
+  // Artifacts are append-only, so a duplicate cannot be tidied away afterwards -
+  // it sits in the evidence record forever, and a DPO reading "Paper on file (4)"
+  // has no way to tell that two of them are one form counted twice.
+  //
+  // Refusing is the safe direction. Two genuinely separate forms, signed on the
+  // same day by the same person with identical answers and the same scan, are
+  // indistinguishable from a double submission - and of those two readings, the
+  // accidental one is overwhelmingly the likelier.
+  const { rows: existingArtifact } = await client.query<{ id: string; committed_at: Date }>(
+    `SELECT id, committed_at FROM consent_artifact
+      WHERE data_principal_id = $1 AND payload_hash = $2
+      LIMIT 1`,
+    [principalId, payloadHash],
+  );
+  if (existingArtifact.length > 0) {
+    throw new CommitError(
+      "already_recorded",
+      "This exact form is already on file for this person",
+      { artifactId: existingArtifact[0].id, committedAt: existingArtifact[0].committed_at },
+    );
+  }
 
   const { rows: artifactRows } = await client.query<{ id: string }>(
     `INSERT INTO consent_artifact

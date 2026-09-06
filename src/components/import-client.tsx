@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { Panel } from "@/components/ui/panel";
@@ -157,7 +158,7 @@ export function ImportClient({ purposes, notices }: { purposes: Purpose[]; notic
   return (
     <div className="flex flex-col gap-4">
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">{error}</p>
+        <Callout tone="red" live="alert">{error}</Callout>
       )}
 
       {stage === "upload" && (

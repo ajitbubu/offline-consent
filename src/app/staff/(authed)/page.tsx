@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { query } from "@/lib/db";
 import { requireStaff } from "@/lib/auth";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import { roleAtLeast } from "@/lib/consent";
 import { corpusStatus } from "@/lib/training";
@@ -143,11 +144,16 @@ export default async function StaffOverviewPage() {
         )}
 
         {counts.undated_forms !== "0" && (
-          <p className="mt-4 rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
-            {counts.undated_forms} artifact{counts.undated_forms === "1" ? " is" : "s are"} recorded
-            as undated. An undated consent is a weak consent, so the s.5(2) notice matters more for
-            these.
-          </p>
+          <div className="mt-4">
+            {/* No live region: this is standing advice, not something that just
+                happened. A page that announces its own boilerplate on every
+                visit teaches people to ignore the announcements that matter. */}
+            <Callout tone="amber">
+              {counts.undated_forms} artifact{counts.undated_forms === "1" ? " is" : "s are"}{" "}
+              recorded as undated. An undated consent is a weak consent, so the s.5(2) notice
+              matters more for these.
+            </Callout>
+          </div>
         )}
       </Panel>
     </div>

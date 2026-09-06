@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { Field, Input, Select } from "@/components/ui/field";
 import { SignaturePad, signatureBlob } from "@/components/signature-pad";
 
@@ -173,9 +174,9 @@ export function KioskClient({ notices }: { notices: Notice[] }) {
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col gap-5">
       {secondsLeft !== null && (
-        <p role="status" className="rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
+        <Callout tone="amber" live="status">
           Still there? This will clear itself in {secondsLeft} seconds.
-        </p>
+        </Callout>
       )}
 
       {stage === "welcome" && (
@@ -251,9 +252,7 @@ export function KioskClient({ notices }: { notices: Notice[] }) {
           </h1>
           <SignaturePad canvasRef={canvasRef} onInkChange={setHasInk} />
           {error && (
-            <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
-              {error}
-            </p>
+            <Callout tone="red" live="alert">{error}</Callout>
           )}
           <Button onClick={submit} disabled={busy || !hasInk}>
             {busy ? "Saving…" : "Finish"}

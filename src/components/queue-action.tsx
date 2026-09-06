@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/field";
 
 /**
@@ -75,9 +76,7 @@ export function QueueAction({
         }}
       />
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
-          {error}
-        </p>
+        <Callout tone="red" live="alert">{error}</Callout>
       )}
       <div className="flex gap-2">
         <Button onClick={submit} disabled={busy || note.trim().length < minNote}>

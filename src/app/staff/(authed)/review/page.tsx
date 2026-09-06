@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CheckCircle2 } from "lucide-react";
 import { query } from "@/lib/db";
 import { Badge } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import { intakeSourceLabels, type IntakeSource } from "@/lib/consent";
 
@@ -51,10 +52,9 @@ export default async function ReviewQueuePage({
       </div>
 
       {committed && (
-        <p className="flex items-center gap-2 rounded-md bg-green-soft px-3 py-2 text-sm text-green">
-          <CheckCircle2 size={16} aria-hidden />
+        <Callout tone="green" live="status" icon={<CheckCircle2 size={16} aria-hidden />}>
           Committed to the register. The artifact is now permanent evidence.
-        </p>
+        </Callout>
       )}
 
       {rows.length === 0 ? (

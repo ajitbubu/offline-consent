@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { AlertCircle, ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { OtpInput } from "@/components/otp-input";
@@ -248,11 +249,14 @@ export function WithdrawClient() {
           // Not a success, and not silent. This usually means the register holds
           // the person under a second identity that this contact point does not
           // reach, which only a human can put right.
-          <p className="rounded-md bg-amber-soft px-4 py-3 text-sm text-amber">
+          // role="alert". Somebody asked to withdraw consent and it did not
+          // happen. That is the single most consequential thing this flow can
+          // report, and until now a screen reader was told none of it.
+          <Callout tone="amber" live="alert">
             We have no record of {missing.map((o) => nameFor(o.purposeId)).join(", ")} for
             you, so nothing was withdrawn for it. Your request has been logged and someone
             will look into it. Please contact us if you do not hear back.
-          </p>
+          </Callout>
         )}
         {/* s.6(5) says withdrawal has no effect on processing already carried
             out. Saying so plainly is more honest than implying deletion. */}

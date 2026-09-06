@@ -21,7 +21,7 @@ import { roleAtLeast, staffRoleLabels, type StaffRole } from "@/lib/consent";
 const LINKS = [
   { href: "/staff", label: "Overview", icon: LayoutDashboard, minimum: "operator", group: "work" },
   { href: "/staff/intake/new", label: "New form", icon: FileText, minimum: "operator", group: "work" },
-  { href: "/staff/review", label: "Review queue", icon: Inbox, minimum: "operator", group: "work" },
+  { href: "/staff/review", label: "Review", icon: Inbox, minimum: "operator", group: "work" },
   { href: "/staff/principals", label: "Register", icon: Users, minimum: "dpo", group: "dpo" },
   { href: "/staff/duplicates", label: "Duplicates", icon: CopyCheck, minimum: "dpo", group: "dpo" },
   { href: "/staff/notices", label: "Notices", icon: BellRing, minimum: "dpo", group: "dpo" },
@@ -65,7 +65,7 @@ export function StaffNav({ role }: { role: StaffRole }) {
         <span className="shrink-0 py-4 text-sm font-semibold text-ink">Consent register</span>
         <nav
           aria-label="Staff sections"
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          className="flex min-w-0 flex-1 items-center overflow-x-auto"
         >
           {LINKS.filter((l) => roleAtLeast(role, l.minimum)).map((link, i, shown) => {
             const startsGroup = i > 0 && shown[i - 1].group !== link.group;
@@ -90,7 +90,7 @@ export function StaffNav({ role }: { role: StaffRole }) {
                 // positioned - so the hidden labels sat past the right edge and
                 // stretched the document by sixty pixels of scrollable nothing.
                 aria-label={link.label}
-                className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-4 text-sm ${
+                className={`flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-4 text-sm ${
                   active
                     ? "border-navy font-medium text-ink"
                     : "border-transparent text-muted hover:text-ink"

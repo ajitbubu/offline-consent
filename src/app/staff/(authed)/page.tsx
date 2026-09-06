@@ -130,6 +130,25 @@ export default async function StaffOverviewPage() {
               <span className="text-muted"> — artifacts, current consent, audit trail.</span>
             </li>
           )}
+          {/* Occasional jobs rather than daily navigation, so they live here
+              instead of taking a slot in the primary nav. */}
+          {roleAtLeast(staff.role, "dpo") && (
+            <li>
+              <Link href="/staff/import" className="font-medium text-blue hover:underline">
+                Import a spreadsheet
+              </Link>
+              <span className="text-muted">
+                {" "}
+                — a CSV of records already typed out of the filing cabinet.
+              </span>
+            </li>
+          )}
+          <li>
+            <Link href="/staff/kiosk" className="font-medium text-blue hover:underline">
+              Set up the counter tablet
+            </Link>
+            <span className="text-muted"> — capture a signature at the counter.</span>
+          </li>
         </ol>
         {roleAtLeast(staff.role, "dpo") && (
           <p className="mt-4 rounded-md bg-canvas px-3 py-2 text-sm text-muted">

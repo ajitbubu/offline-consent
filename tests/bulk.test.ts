@@ -220,9 +220,9 @@ describe("commitBatch", () => {
       batchId = await batch(client, fx);
       const csv = [
         "Name,Mobile,Signed,Newsletter",
-        `Good One ${suffix},9876511111,2019-03-04,yes`,
+        `Anaya Bhatt ${suffix},9876511111,2019-03-04,yes`,
         `,,,yes`,
-        `Good Two ${suffix},9876511112,2019-03-04,no`,
+        `Farhan Qureshi ${suffix},9876511112,2019-03-04,no`,
       ].join("\n");
       await buildDrafts(
         { batchId, text: csv, mapping: MAPPING, noticeId: fx.noticeId, staffId: fx.staffId, purposes: purposesOf(fx) },
@@ -248,8 +248,12 @@ describe("commitBatch", () => {
       );
       expect(rows[0].status).toBe("partially_committed");
     } finally {
-      // consent_artifact is append-only, so the two artifacts this creates stay.
-      // Everything reachable is cleaned up; CI gets a fresh database anyway.
+      // consent_artifact is append-only and consent_record references the people
+      // with ON DELETE RESTRICT, so the artifacts and principals this creates
+      // stay behind. CI gets a fresh database; a developer's does not, which is
+      // why the two names are deliberately dissimilar - an earlier pair called
+      // "Good One" and "Good Two" scored 0.6 on the duplicate detector and
+      // manufactured a false candidate on every run.
       await pool.query("DELETE FROM intake_draft WHERE batch_id = $1", [batchId]);
     }
   });

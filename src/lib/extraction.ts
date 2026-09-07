@@ -22,6 +22,7 @@
 import "server-only";
 import { env } from "@/lib/env";
 import {
+  type ExtractedField,
   EXTRACTION_SCHEMA_VERSION,
   type Extraction,
   type OcrPage,
@@ -60,7 +61,87 @@ interface ServiceResponse {
   engine_version: string;
   pages: OcrPage[];
   tickboxes: ServiceTickBox[];
+  fields?: ServiceField[];
 }
+
+interface ServiceField {
+  key: string;
+  value: string | null;
+  confidence: number;
+  anchor_score: number;
+  method: "pattern" | "anchored" | null;
+  page: number | null;
+  bbox: [number, number, number, number] | null;
+}
+
+/**
+ * The printed wording beside each handwritten field, and how to find its value.
+ *
+ * These are WORDING, not identifiers - the same rule tick-box labels follow, so
+ * the service still never sees anything it could use to name a database row.
+ * Several spellings per field because forms are inconsistent: "Mobile",
+ * "Mobile No." and "Phone" are all the same box.
+ *
+ * Hard-coded rather than configurable because the keys have to line up with
+ * DraftPayload for a reviewer to accept a value in one move, and a mismatch
+ * would be silent. When a form uses wording that is not here, the honest fix is
+ * to add the spelling, not to loosen the matcher: a loose matcher pre-fills the
+ * wrong field, which is worse than pre-filling nothing.
+ */
+const FIELD_REQUESTS = [
+  {
+    key: "fullName",
+    kind: "text",
+    // Ranked by how many of 146 real Indian bank forms use each spelling
+    // (harvested by ml/scripts/harvest_labels.py over docs/training-data).
+    // "Name" alone appears on 24 of them and is deliberately LAST: the anchor
+    // keeps the best-scoring label, and a bare "Name" matches the first word of
+    // "Name of Guarantor" perfectly - so the specific spellings must be present
+    // to outscore it on forms that carry several name fields. A form that only
+    // has somebody else's name will still anchor on it; that is what the review
+    // screen is for.
+    labels: [
+      "Name of Applicant",
+      "Name of Primary Depositor",
+      "Applicant name",
+      "Full name",
+      "Name (Same as ID Proof)",
+      "Member name",
+      "Name",
+    ],
+  },
+  {
+    key: "phone",
+    kind: "phone",
+    // "Mobile No" leads at 8 forms, then "Phone" at 6 and "Mobile" at 5.
+    labels: [
+      "Mobile No",
+      "Mobile number",
+      "Mobile",
+      "Phone",
+      "Telephone",
+      "Contact number",
+      "Tel",
+    ],
+  },
+  {
+    key: "email",
+    kind: "email",
+    // Every casing and hyphenation appears in the corpus: Email, e-mail,
+    // E-mail ID, Email ID, Email Id. Matching is case-folded, so the variants
+    // that matter are the hyphen and the trailing ID.
+    labels: ["Email ID", "E-mail ID", "Email address", "Email", "E-mail"],
+  },
+  {
+    key: "collectedOn",
+    kind: "date",
+    // "Date" appears on 76 of 146 forms, almost always beside the signature at
+    // the foot of the form, which is exactly the date we want.
+    labels: ["Date (DD/MM/YYYY)", "Date signed", "Signed", "Dated", "Date"],
+  },
+] as const;
+
+const FIELD_KEYS = new Set(FIELD_REQUESTS.map((f) => f.key));
 
 export const extractionConfigured = (): boolean => env.ML_SERVICE_URL !== undefined;
 
@@ -111,6 +192,10 @@ export async function extract(
     "labels",
     JSON.stringify(labels.map((label, index) => ({ index, text: label.text }))),
   );
+  // Asked for on every scan, with or without a notice version: a name and a
+  // phone number do not depend on knowing which printed form this is, and the
+  // reviewer benefits from them either way.
+  form.set("fields", JSON.stringify(FIELD_REQUESTS));
 
   let body: ServiceResponse;
   try {
@@ -143,7 +228,28 @@ export async function extract(
     pages: body.pages,
   };
 
-  if (labels.length === 0) return { ocrTokens, extraction: null };
+  // Only keys we actually asked for. A result for anything else is dropped
+  // rather than trusted: the app decides what a field means, not the service.
+  const fields: ExtractedField[] = [];
+  for (const field of body.fields ?? []) {
+    if (!FIELD_KEYS.has(field.key as ExtractedField["key"])) {
+      console.error("Extraction: field we did not ask for", field.key);
+      continue;
+    }
+    fields.push({
+      key: field.key as ExtractedField["key"],
+      value: field.value,
+      confidence: field.confidence,
+      anchorScore: field.anchor_score,
+      method: field.method,
+      page: field.page,
+      bbox: field.bbox,
+    });
+  }
+
+  if (labels.length === 0 && fields.length === 0) {
+    return { ocrTokens, extraction: null };
+  }
 
   // Map index back onto the catalogue rows WE sent. A reading whose index does
   // not correspond to a label we asked about is dropped rather than trusted.
@@ -173,6 +279,7 @@ export async function extract(
       engineVersion: body.engine_version,
       extractedAt: capturedAt,
       tickboxes,
+      fields,
     },
   };
 }

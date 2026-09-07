@@ -18,6 +18,8 @@ Two rules shape it, and both come from the app rather than from convenience:
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = 1
@@ -61,9 +63,43 @@ class TickBoxResult(BaseModel):
     ink_ratio: float | None = None
 
 
+class FieldRequest(BaseModel):
+    """One handwritten field to look for.
+
+    `labels` is the wording PRINTED beside the field on the paper, not the
+    field's name in our schema - several spellings are allowed because forms
+    say "Mobile", "Mobile No." and "Phone" for the same box. Like tick-box
+    labels, these are wording rather than identifiers: the service still never
+    sees a database id, and results come back by `key`, which the app chose.
+    """
+
+    key: str
+    labels: list[str] = Field(default_factory=list)
+    # email and phone are self-identifying and matched by pattern; text and date
+    # are only meaningful relative to the label printed beside them.
+    kind: Literal["text", "email", "phone", "date"] = "text"
+
+
+class FieldResult(BaseModel):
+    key: str
+    # None means "not read", never "blank". A failed read and a confirmed empty
+    # field are different facts and the app renders them differently.
+    value: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
+    # How well the printed label matched. 1.0 for a pattern match, which needs
+    # no label to be trustworthy.
+    anchor_score: float = Field(ge=0.0, le=1.0)
+    # How it was found, so a reviewer can weigh it: "pattern" is deterministic,
+    # "anchored" depends on the label being read correctly, None is a failure.
+    method: Literal["pattern", "anchored"] | None = None
+    page: int | None = None
+    bbox: tuple[int, int, int, int] | None = None
+
+
 class ExtractResponse(BaseModel):
     schema_version: int = SCHEMA_VERSION
     engine: str
     engine_version: str
     pages: list[Page]
     tickboxes: list[TickBoxResult]
+    fields: list[FieldResult] = Field(default_factory=list)

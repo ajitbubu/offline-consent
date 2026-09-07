@@ -18,8 +18,15 @@ import logging
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
+from app import fields as fields_reader
 from app import tickbox
-from app.contract import SCHEMA_VERSION, ExtractResponse, Page, TickBoxRequest
+from app.contract import (
+    SCHEMA_VERSION,
+    ExtractResponse,
+    FieldRequest,
+    Page,
+    TickBoxRequest,
+)
 from app.engines import DEFAULT_ENGINE, available, get_engine
 from app.render import UnsupportedScan, render
 
@@ -41,6 +48,14 @@ def health() -> dict[str, object]:
         "engines": available(),
         "default": DEFAULT_ENGINE,
         "engineVersion": engine.version(),
+        # Served so tooling never has to restate them. scripts/calibrate-tickbox.mjs
+        # carried its own copy of INK_THRESHOLD and, in the same breath, told the
+        # operator to go and edit tickbox.py - so the first successful use of the
+        # calibrator made the calibrator wrong, and it then reported misread
+        # counts against a threshold no longer in force. A number a tool exists
+        # to change is the last number that tool should hard-code.
+        "inkThreshold": tickbox.INK_THRESHOLD,
+        "minAnchorScore": tickbox.MIN_ANCHOR_SCORE,
     }
 
 
@@ -51,6 +66,10 @@ async def extract(
     # JSON array of {"index": int, "text": str}. Never a database identifier:
     # results come back by index and the app maps them onto its own catalogue.
     labels: str = Form("[]"),
+    # JSON array of {"key": str, "labels": [str], "kind": str}. The printed
+    # wording beside each handwritten field, so the value next to it can be
+    # read. Same rule as tick-box labels: wording, never an identifier.
+    fields: str = Form("[]"),
     engine: str | None = Form(None),
 ) -> ExtractResponse:
     data = await file.read()
@@ -63,6 +82,11 @@ async def extract(
         requests = [TickBoxRequest(**item) for item in json.loads(labels)]
     except (ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=f"Bad labels: {error}") from error
+
+    try:
+        field_requests = [FieldRequest(**item) for item in json.loads(fields)]
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=f"Bad fields: {error}") from error
 
     try:
         selected = get_engine(engine)
@@ -88,10 +112,12 @@ async def extract(
         )
 
     readings = tickbox.read(pages, images, requests) if requests else []
+    field_readings = fields_reader.read(pages, field_requests) if field_requests else []
 
     return ExtractResponse(
         engine=selected.name,
         engine_version=selected.version(),
         pages=pages,
         tickboxes=readings,
+        fields=field_readings,
     )

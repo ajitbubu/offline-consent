@@ -37,6 +37,7 @@ def build_form(ticked: set[int], *, noise: bool = False) -> Image.Image:
     draw.text((140, 130), "MEMBERSHIP APPLICATION FORM", font=_font(46), fill=0)
     draw.text((140, 230), "Full name:  Priya Sharma", font=_font(36), fill=0)
     draw.text((140, 300), "Mobile:     98765 43210", font=_font(36), fill=0)
+    draw.text((140, 370), "Email:      priya.sharma@example.org", font=_font(36), fill=0)
 
     box_size, left = 46, 150
     for index, label in enumerate(LABELS):

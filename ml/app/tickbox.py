@@ -28,6 +28,7 @@ which is what the review screen does with it anyway.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -69,8 +70,20 @@ def _score(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def find_anchor(tokens: list[Token], label: str) -> tuple[float, tuple[int, int, int, int] | None]:
-    """Best fuzzy match for `label` in the token stream, and its bounding box."""
+def find_anchor(
+    tokens: list[Token],
+    label: str,
+    bonus: Callable[[list[Token], int], float] | None = None,
+) -> tuple[float, tuple[int, int, int, int] | None]:
+    """Best fuzzy match for `label` in the token stream, and its bounding box.
+
+    `bonus` lets a caller prefer matches that look like a printed FIELD LABEL
+    over the same words appearing inside a sentence. fields.py had this as a
+    private fork of this function, which meant the fix only ever reached field
+    reading: the SBI form prints "...sent on provided Mobile No./Email-ID)" as a
+    section header, and tick-box anchoring still scored prose at 1.00 here while
+    field anchoring had learned not to. One implementation, one behaviour.
+    """
     target = normalise(label)
     if not target or not tokens:
         return 0.0, None
@@ -92,6 +105,8 @@ def find_anchor(tokens: list[Token], label: str) -> tuple[float, tuple[int, int,
             if not candidate:
                 continue
             score = _score(target, candidate)
+            if bonus is not None:
+                score += bonus(tokens, start + width)
             if score > best_score:
                 best_score = score
                 best_box = (
@@ -101,7 +116,8 @@ def find_anchor(tokens: list[Token], label: str) -> tuple[float, tuple[int, int,
                     max(t.bbox[3] for t in window),
                 )
 
-    return best_score, best_box
+    # A bonus must never let a mediocre match report itself as perfect.
+    return min(best_score, 1.0), best_box
 
 
 def _ink_mask(image: Image.Image, box: tuple[int, int, int, int], background: float) -> np.ndarray:

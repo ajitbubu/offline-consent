@@ -127,8 +127,17 @@ export const datePrecisionLabels: Record<DatePrecision, string> = {
  * screen IS the annotation tool, so these types are read on both sides.
  *
  * Bumped when the stored shape changes, so an old blob stays readable.
+ *
+ *   1  {schemaVersion, engine, engineVersion, extractedAt, tickboxes:[...]}
+ *   2  adds `fields: [{key, value, confidence, anchorScore, method, page, bbox}]`
+ *      - the handwritten name, phone, email and date read off the scan.
+ *      `value: null` means NOT READ, never "blank"; a version-1 blob has no
+ *      `fields` key at all, which is a third state a reader must not confuse
+ *      with either. That distinction is the whole reason this number moved:
+ *      leaving both shapes stamped 1 would make a row's own version stamp a
+ *      lie, in the column that IS the training corpus and the evidence.
  */
-export const EXTRACTION_SCHEMA_VERSION = 1;
+export const EXTRACTION_SCHEMA_VERSION = 2;
 
 export interface OcrToken {
   text: string;
@@ -172,6 +181,26 @@ export interface TickBoxReading {
   bbox: [number, number, number, number] | null;
 }
 
+/**
+ * One handwritten field read off the scan.
+ *
+ * `value` is null for "not read", never for "blank". A failed read and a field
+ * the person genuinely left empty are different facts, and the review screen
+ * shows them differently - the same distinction `granted: null` draws on a
+ * tick-box.
+ */
+export interface ExtractedField {
+  /** Matches a key in DraftPayload, so a reviewer can accept it in one move. */
+  key: "fullName" | "phone" | "email" | "collectedOn";
+  value: string | null;
+  confidence: number;
+  anchorScore: number;
+  /** "pattern" is deterministic; "anchored" depends on the printed label. */
+  method: "pattern" | "anchored" | null;
+  page: number | null;
+  bbox: [number, number, number, number] | null;
+}
+
 /** What the service proposed. Never committed; a human moves it into payload. */
 export interface Extraction {
   schemaVersion: number;
@@ -179,6 +208,7 @@ export interface Extraction {
   engineVersion: string;
   extractedAt: string;
   tickboxes: TickBoxReading[];
+  fields: ExtractedField[];
 }
 
 /**

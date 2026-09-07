@@ -17,7 +17,17 @@ const { extract, extractionConfigured, labelsForNotice } = await import("@/lib/e
 
 const EVIDENCE = { id: "e1", storageKey: "2026/09/abc", contentType: "image/png" };
 
-const serviceBody = (tickboxes: unknown[] = []) => ({
+const field = (key: string, value: string | null) => ({
+  key,
+  value,
+  confidence: 0.93,
+  anchor_score: 1.0,
+  method: "pattern",
+  page: 1,
+  bbox: [140, 230, 400, 262],
+});
+
+const serviceBody = (tickboxes: unknown[] = [], fields: unknown[] = []) => ({
   schema_version: 1,
   engine: "tesseract",
   engine_version: "5.5.3",
@@ -30,6 +40,7 @@ const serviceBody = (tickboxes: unknown[] = []) => ({
     },
   ],
   tickboxes,
+  fields,
 });
 
 const reading = (index: number, granted: boolean | null) => ({
@@ -145,6 +156,78 @@ describe("labelsForNotice", () => {
 
       expect(labels.map((l) => l.text)).toEqual(fx.labels);
       expect(labels.map((l) => l.purposeId)).toEqual(fx.purposeIds);
+    });
+  });
+});
+
+describe("field extraction", () => {
+  it("maps a field across the wire, snake_case to camelCase", async () => {
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const labels = await labelsForNotice(fx.noticeId, client);
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => serviceBody([], [field("fullName", "Priya Sharma")]),
+      });
+
+      const result = await extract(EVIDENCE, labels);
+      const found = result!.extraction!.fields.find((f) => f.key === "fullName");
+      // A typo in this mapping yields undefined on a compliance record and
+      // nothing fails, which is why it is asserted rather than assumed.
+      expect(found!.value).toBe("Priya Sharma");
+      expect(found!.anchorScore).toBe(1.0);
+      expect(found!.method).toBe("pattern");
+    });
+  });
+
+  it("drops a field key it never asked about", async () => {
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const labels = await labelsForNotice(fx.noticeId, client);
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () =>
+          serviceBody([], [field("fullName", "Priya"), field("aadhaar", "1234 5678 9012")]),
+      });
+
+      const result = await extract(EVIDENCE, labels);
+      const keys = result!.extraction!.fields.map((f) => f.key);
+      // The app decides what a field means, not the service. This is the same
+      // trust boundary the tick-box index guard enforces, and it was shipped
+      // untested in this direction.
+      expect(keys).toContain("fullName");
+      expect(keys).not.toContain("aadhaar");
+    });
+  });
+
+  it("returns an extraction for fields alone, with no notice chosen", async () => {
+    await withRollback(async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => serviceBody([], [field("phone", "98765 43210")]),
+      });
+
+      // A name and a phone do not depend on knowing which printed form this is,
+      // so passing no labels must still yield an extraction rather than null.
+      const result = await extract(EVIDENCE, []);
+      expect(result!.extraction).not.toBeNull();
+      expect(result!.extraction!.tickboxes).toEqual([]);
+      expect(result!.extraction!.fields[0].value).toBe("98765 43210");
+    });
+  });
+
+  it("stamps the bumped storage schema version", async () => {
+    await withRollback(async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => serviceBody([], [field("email", "a@b.org")]),
+      });
+      const result = await extract(EVIDENCE, []);
+      // Version 1 blobs have no `fields` key at all. Two shapes sharing one
+      // version number would make the stamp a lie in the column that is both
+      // the evidence and the training corpus.
+      expect(result!.extraction!.schemaVersion).toBe(EXTRACTION_SCHEMA_VERSION);
+      expect(EXTRACTION_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
     });
   });
 });

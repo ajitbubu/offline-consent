@@ -17,10 +17,43 @@ import {
   NOTICE_AT_COLLECTION,
   noticeAtCollectionLabels,
   PREFILL_MIN_CONFIDENCE,
+  type ExtractedField,
   type Extraction,
   type OcrTokens,
   type TickBoxReading,
 } from "@/lib/consent";
+
+/**
+ * What the scan said about a field, shown under it.
+ *
+ * A pre-filled box with no provenance is the exact failure this codebase keeps
+ * warning about: reviewers stop checking things that are usually right. So
+ * every value that came off the scan says so, and every value the service read
+ * but did NOT fill in says that too - a low-confidence read is evidence the
+ * reviewer should look at the paper, not something to hide.
+ *
+ * Declared at module scope rather than inside the form: a component created
+ * during render is a new component type on every keystroke, and React would
+ * remount it each time.
+ */
+function ScanHint({ field }: { field: ExtractedField | undefined }) {
+  if (!field) return null;
+  if (field.value === null) {
+    return <span className="text-xs text-amber">Not found on the scan. Read it yourself.</span>;
+  }
+  if (field.confidence < PREFILL_MIN_CONFIDENCE) {
+    return (
+      <span className="text-xs text-amber">
+        Scan read &ldquo;{field.value}&rdquo; but is not sure. Not filled in — check the paper.
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs text-muted">
+      Read from the scan{field.method === "anchored" ? " beside its printed label" : ""}. Check it.
+    </span>
+  );
+}
 
 interface DuplicateCandidate {
   principalId: string;
@@ -116,6 +149,27 @@ export function DraftForm({
   const readingFor = (purposeId: string): TickBoxReading | undefined =>
     extraction?.tickboxes.find((t) => t.purposeId === purposeId);
 
+  const fieldFor = (key: ExtractedField["key"]) =>
+    extraction?.fields?.find((f) => f.key === key);
+
+  /**
+   * The scanned date as YYYY-MM-DD, or null.
+   *
+   * The scan gives free text ("4 March 2019") and the control is type="date",
+   * so an unparseable read must NOT pre-fill - it is shown as a hint instead
+   * and the reviewer types it. Refusing to guess here is the same rule the
+   * tick-boxes follow: a wrong pre-fill is worse than an empty field.
+   */
+  const scannedDate = (raw: string | null | undefined): string | null => {
+    if (!raw) return null;
+    const parsed = Date.parse(raw.replace(/[^\w\s\-/.]/g, " ").replace(/\s+/g, " ").trim());
+    if (Number.isNaN(parsed)) return null;
+    const d = new Date(parsed);
+    // A date in the future is a misread, not a paper date.
+    if (d.getTime() > Date.now()) return null;
+    return d.toISOString().slice(0, 10);
+  };
+
   /**
    * Runs the scan through the extraction service.
    *
@@ -146,6 +200,36 @@ export function DraftForm({
       // (granted === null) is left exactly as it was: "not found" is not
       // "not ticked", and a wrong pre-fill is worse than an empty one because
       // reviewers stop checking things that are usually right.
+      // The handwritten fields, on the same terms as the tick-boxes: only a
+      // confident read, and NEVER over something a person already typed. The
+      // reviewer's own keystrokes outrank anything a model proposed, and a
+      // scan that lands after they have started typing must not undo it.
+      const fields: ExtractedField[] = body.extraction?.fields ?? [];
+      const confident = (key: ExtractedField["key"]): string | null => {
+        const f = fields.find((x) => x.key === key);
+        if (!f || f.value === null || f.confidence < PREFILL_MIN_CONFIDENCE) return null;
+        return f.value;
+      };
+
+      setPayload((p) => {
+        const name = confident("fullName");
+        const phone = confident("phone");
+        const email = confident("email");
+        const dated = scannedDate(confident("collectedOn"));
+        return {
+          ...p,
+          principal: {
+            ...p.principal,
+            fullName: p.principal.fullName.trim() === "" && name ? name : p.principal.fullName,
+            phone: p.principal.phone ? p.principal.phone : phone,
+            email: p.principal.email ? p.principal.email : email,
+          },
+          collectedOn: p.collectedOn ? p.collectedOn : dated,
+          collectedOnPrecision:
+            p.collectedOn === null && dated ? "day" : p.collectedOnPrecision,
+        };
+      });
+
       setPayload((p) => ({
         ...p,
         items: p.items.map((item) => {
@@ -318,7 +402,13 @@ export function DraftForm({
         <Panel title="The person" description="Exactly as written on the form.">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <Field label="Full name" htmlFor="fullName" error={errorFor("fullName")} required>
+              <Field
+                label="Full name"
+                htmlFor="fullName"
+                error={errorFor("fullName")}
+                hint={<ScanHint field={fieldFor("fullName")} />}
+                required
+              >
                 <Input
                   id="fullName"
                   value={payload.principal.fullName}
@@ -333,7 +423,13 @@ export function DraftForm({
               label="Mobile number"
               htmlFor="phone"
               error={errorFor("phone")}
-              hint="Type it as written. It must resolve to a dialable number."
+              hint={
+                fieldFor("phone") ? (
+                  <ScanHint field={fieldFor("phone")} />
+                ) : (
+                  "Type it as written. It must resolve to a dialable number."
+                )
+              }
             >
               <Input
                 id="phone"
@@ -348,7 +444,12 @@ export function DraftForm({
                 }
               />
             </Field>
-            <Field label="Email" htmlFor="email" error={errorFor("email")}>
+            <Field
+              label="Email"
+              htmlFor="email"
+              error={errorFor("email")}
+              hint={<ScanHint field={fieldFor("email")} />}
+            >
               <Input
                 id="email"
                 type="email"
@@ -381,7 +482,12 @@ export function DraftForm({
               </Field>
             </div>
 
-            <Field label="Date signed" htmlFor="collectedOn" error={errorFor("collectedOn")}>
+            <Field
+              label="Date signed"
+              htmlFor="collectedOn"
+              error={errorFor("collectedOn")}
+              hint={<ScanHint field={fieldFor("collectedOn")} />}
+            >
               <Input
                 id="collectedOn"
                 type="date"

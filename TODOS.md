@@ -30,6 +30,16 @@ Measured on a rendered membership form at 200 DPI:
     email        priya.sharma@example.org   conf 0.93  pattern
     collectedOn  4 March 2019               conf 0.95  anchored
 
+**The extracted fields now reach the reviewer.** They previously did not: the
+values were produced, sent over the wire, persisted to `intake_draft.extraction`
+and read by nothing, so the operator still typed every name and phone by hand
+while the answer sat in the database beside them. The review screen now
+pre-fills name, phone, email and date, on the same terms as the tick-boxes -
+only above `PREFILL_MIN_CONFIDENCE`, never over something a person already
+typed, and every value carries a visible note saying it came off the scan and
+should be checked. A read the service was unsure of is SHOWN and deliberately
+not filled in.
+
 **What the model is still for.** A form that does NOT print its field labels, or
 prints them somewhere unrelated to the value. Anchoring cannot help there, and
 that is the remaining job. It still needs 50-100 reviewed scans of one layout,
@@ -234,6 +244,13 @@ that does not exist here. That scaffolding is the actual work, not the specs.
   recorded consent from a single clean form. Anything between 0.11 and 0.55
   fixes this sample; `npm run calibrate` picks the value from real reviewed
   scans. Do not tune it from this one synthetic case.
+- **The review screen's field pre-fill has no automated test.** The logic lives
+  in `draft-form.tsx` and `vitest.config.mts` is `environment: "node"` with no
+  jsdom, RTL or Playwright, so there is nowhere to run it. Verified by hand in a
+  browser against a real scan instead: all four fields populated, the date
+  parsed from "4 March 2019" to 2019-03-04, and a 62%-confidence tick-box
+  correctly left unticked with "Unsure — check the scan". This is the same gap
+  that leaves 354 lines of other new UI untested; the harness is the work.
 - **`countDuplicates` in `src/lib/duplicates.ts` is exported and never called.**
   The duplicates page renders pairs without a total. Either surface the count on
   the dashboard beside the other queue numbers, or delete the function.

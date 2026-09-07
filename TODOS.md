@@ -40,6 +40,32 @@ typed, and every value carries a visible note saying it came off the scan and
 should be checked. A read the service was unsure of is SHOWN and deliberately
 not filled in.
 
+**There is now a coverage number, and it is 18%.**
+`ml/scripts/field_coverage.py` runs extraction over all 146 real bank forms and
+reports how often a field is located. Two numbers, because the obvious one lies:
+
+    field          matched   ON A LABEL
+    fullName         99.3%        15.8%
+    phone            99.3%        14.4%
+    email            95.2%        17.1%
+    collectedOn     100.0%        24.7%
+    overall                       18.0%
+
+"Matched" only asks whether something cleared MIN_ANCHOR_SCORE, and a fuzzy
+match against any sentence containing "Name" or "Date" clears it - the SBI
+section header "...sent on provided Mobile No./Email-ID)" scores 1.00 and is
+prose. A metric that starts at 98% cannot show an improvement.
+
+"On a label" requires the match to be punctuated like a field label, and that is
+too STRICT in the other direction: SBI prints "Mobile No." with a period and
+"Email ID" with nothing, and both are real fields. The truth is between the two.
+
+**What would make the number honest is the same thing that would make extraction
+work: detecting the VALUE REGION** - the comb boxes, rules and empty cells a
+value gets written into. A label followed by writable space is a field; a label
+followed by more words is prose. That is the next piece, and it is worth more
+than the layout model right now because it needs no corpus.
+
 **What the model is still for.** A form that does NOT print its field labels, or
 prints them somewhere unrelated to the value. Anchoring cannot help there, and
 that is the remaining job. It still needs 50-100 reviewed scans of one layout,

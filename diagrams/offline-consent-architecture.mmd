@@ -1,0 +1,58 @@
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": true, "wrappingWidth": 480, "nodeSpacing": 45, "rankSpacing": 60}} }%%
+flowchart TB
+
+  subgraph S["STAFF — httpOnly cookie · aud offline-consent-staff · 8 h · Origin checked"]
+    SU["Console: Operator · DPO · Admin<br/>+ kiosk tablet"]
+    SAPI["/api/staff/*<br/>requireStaff(role)"]
+    DPO["DPO surfaces<br/>register search · principal detail<br/>notice-owed s.5(2) · cessation s.6(6) · merge"]
+    SU --> SAPI
+    SAPI --> DPO
+  end
+
+  subgraph P["DATA PRINCIPAL — bearer in memory · aud offline-consent-principal · 15 min · no cookie"]
+    PU["Public portal<br/>/withdraw · /notice/:code/:version"]
+    PAPI["/api/portal/*<br/>requirePrincipal()"]
+    POTP["otp.ts · withdrawal.ts<br/>6-digit code · 5 min · 5 attempts<br/>NO ROW if no match"]
+    PU --> PAPI
+    PAPI --> POTP
+  end
+
+  subgraph I["ONE INTAKE PIPELINE — four ways in, one way through"]
+    IM["Manual · Scan · Bulk CSV · Kiosk+signature"]
+    DR["intake_draft<br/>one payload shape"]
+    HR["Human review<br/>scan beside the fields · NO AUTO-COMMIT"]
+    CD["commitDraft() — src/lib/intake.ts<br/>ONLY writer of consent_artifact<br/>ONE transaction, audit row included"]
+    IM --> DR
+    DR --> HR
+    HR --> CD
+  end
+
+  ML["ml/ FastAPI service<br/>OCR + tick-box ink density<br/>writes extraction ONLY, never payload"]
+
+  subgraph ST[" "]
+    subgraph DB["PostgreSQL 16"]
+      AO["APPEND-ONLY — trigger enforced<br/>consent_artifact · consent_artifact_item · audit_log<br/>UPDATE / DELETE raise restrict_violation"]
+      MU["MUTABLE<br/>data_principal · consent_record · intake_draft<br/>intake_batch · otp_challenge · cessation_task · staff_user"]
+    end
+    EV["Evidence store<br/>scans on disk, outside public/<br/>authenticated + logged route"]
+  end
+
+  SAPI --> IM
+  ML -.->|"proposes into intake_draft.extraction"| DR
+  DR -.->|"scan bytes"| EV
+
+  CD -->|"artifact + items + audit"| AO
+  CD -->|"consent_record xN"| MU
+  POTP -->|"writes audit"| AO
+  POTP -->|"per-purpose withdrawal<br/>flips record, never the artifact"| MU
+  DPO -->|"reads evidence + trail"| AO
+  DPO -->|"merge · notices · cessation"| MU
+  EV -.->|"sha256 reuse"| MU
+
+  classDef append fill:#fde8e8,stroke:#c0392b,stroke-width:2px
+  classDef mutable fill:#e8f4fd,stroke:#2874a6,stroke-width:2px
+  classDef gate fill:#fef5e7,stroke:#b9770e,stroke-width:3px
+  class AO append
+  class MU mutable
+  class CD gate
+  style ST fill:none,stroke:none

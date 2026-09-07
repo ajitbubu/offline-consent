@@ -1,0 +1,39 @@
+graph TB
+  PU["PRINCIPAL · Public portal<br/>/withdraw · /notice<br/>bearer in memory, 15 min, no cookie"]
+  PAPI["PRINCIPAL · /api/portal/*<br/>requirePrincipal()"]
+  POTP["PRINCIPAL · otp.ts + withdrawal.ts<br/>6-digit code · 5 min · 5 attempts<br/>NO ROW if no match"]
+
+  SU["STAFF · Console + kiosk<br/>Operator · DPO · Admin<br/>httpOnly cookie, 8 h, Origin checked"]
+  SAPI["STAFF · /api/staff/*<br/>requireStaff(role)"]
+  DPO["STAFF · DPO surfaces<br/>register search · principal detail<br/>notice-owed s.5(2) · cessation s.6(6) · merge"]
+
+  IM["INTAKE · Manual · Scan · Bulk CSV · Kiosk+signature"]
+  DR["INTAKE · intake_draft<br/>one payload shape"]
+  HR["INTAKE · Human review<br/>scan beside the fields · NO AUTO-COMMIT"]
+  CD["INTAKE · commitDraft() — src/lib/intake.ts<br/>ONLY writer of consent_artifact<br/>ONE transaction, audit row included"]
+
+  ML["ml/ FastAPI service<br/>OCR + tick-box ink density<br/>writes extraction ONLY, never payload"]
+  EV["Evidence store<br/>scans on disk, outside public/<br/>authenticated + logged route"]
+
+  AO["DB · APPEND-ONLY — trigger enforced<br/>consent_artifact · consent_artifact_item · audit_log<br/>UPDATE / DELETE raise restrict_violation"]
+  MU["DB · MUTABLE<br/>data_principal · consent_record · intake_draft<br/>intake_batch · otp_challenge · cessation_task · staff_user"]
+
+  PU --> PAPI
+  PAPI --> POTP
+  POTP -->|"per-purpose withdrawal, never the artifact"| MU
+  POTP -->|"writes audit"| AO
+
+  SU --> SAPI
+  SAPI --> IM
+  SAPI --> DPO
+  DPO -->|"reads evidence + trail"| AO
+  DPO -->|"merge · notices · cessation"| MU
+
+  IM --> DR
+  DR --> HR
+  HR --> CD
+  ML -.->|"proposes into intake_draft.extraction"| DR
+  DR -.->|"scan bytes"| EV
+  CD -->|"artifact + items + audit"| AO
+  CD -->|"consent_record xN"| MU
+  EV -.->|"sha256 reuse"| MU

@@ -24,8 +24,18 @@ tokens; leave it unset and the review screen is plain manual entry. See
 [`ml/README.md`](ml/README.md) — and note that a scan reviewed without it
 running is a training pair lost for good.
 
-The seed prints an administrator password once. The app runs on
+The seed prints an administrator password once, and only when `staff_user` is
+empty - re-seeding never resets it, so keep it. The app runs on
 <http://localhost:1002>.
+
+`npm run db:reset` drops the schema and rebuilds it empty (then re-run migrate
+and seed). You will want it eventually: specs that must commit - the bulk
+importer's separate-transaction behaviour, the OTP counter's behaviour across
+connections - cannot roll back, and their residue cannot be deleted row by row
+either, because `consent_artifact` is append-only and its `transcribed_by`
+references `staff_user` ON DELETE RESTRICT. That is the evidence model working
+as designed; the remedy is a new database, not a smarter cleanup. It refuses any
+host that is not local unless `ALLOW_REMOTE_RESET=yes`.
 
 | | |
 |---|---|
@@ -123,11 +133,19 @@ no bypass, including for the kiosk. Adding an intake mode means filling
 
 ## Status
 
-Built and verified: schema, staff auth, evidence storage, manual + scanned
-intake, review and commit, and the public withdrawal portal.
+Phases 0-7 are shipped and FR-1 to FR-16 are built: schema, staff auth, evidence
+storage, all four intake routes (manual, scanned, bulk CSV, kiosk), review and
+commit, the public withdrawal portal, and the DPO surfaces — register search,
+principal detail, duplicate detection and merge, the s.5(2) notice queue, the
+s.6(6) cessation queue, and the lookup-request queue behind the portal's escape
+hatch.
 
-Not yet built: the DPO compliance surfaces (register search, notice-owed queue,
-cessation checklist, principal merge), bulk CSV import, kiosk capture, and the
-field-extraction model. The DPO surfaces now come first — bulk import
-industrialises duplicate creation and there is currently no way to see or fix a
-duplicate. See `TODOS.md` and `docs/PRD.md` §12.
+Phase 8 is half built. OCR, tick-box reading and the training export all work;
+the **layout model for handwritten text does not exist**, because it needs 50-100
+reviewed scans and the corpus starts at zero. Bring `ml` up before reviewing
+scans — a scan reviewed with the service down is a training pair lost for good.
+
+One thing is deliberately not done: `commitDraft` still commits per purpose
+rather than in set-based statements. That matters only at bulk-import volume, and
+the rules it would compress are the most safety-critical logic in the app. See
+`TODOS.md` §2 and `docs/PRD.md` §12.

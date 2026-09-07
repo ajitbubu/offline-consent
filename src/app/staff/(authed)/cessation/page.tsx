@@ -5,6 +5,7 @@ import { AlertTriangle } from "lucide-react";
 import { requireStaff } from "@/lib/auth";
 import { loadTasks } from "@/lib/cessation";
 import { Badge } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import { QueueAction } from "@/components/queue-action";
 
@@ -109,12 +110,14 @@ export default async function CessationPage({
                   Owner {t.system_owner} · raised {when(t.raised_at)}
                 </p>
                 {t.hold_reason && (
-                  <p className="mt-1 rounded-md bg-amber-soft px-2 py-1 text-xs text-amber">
+                  <div className="mt-1">
                     {/* s.6(6) permits continued processing only where the Act
                         requires it, so this is a legal claim. The database makes
                         the person mandatory; showing them is the other half. */}
-                    Held by {t.decided_by ?? "an unknown staff member"}: {t.hold_reason}
-                  </p>
+                    <Callout tone="amber">
+                      Held by {t.decided_by ?? "an unknown staff member"}: {t.hold_reason}
+                    </Callout>
+                  </div>
                 )}
                 {t.status === "completed" && (
                   <p className="mt-1 text-xs text-muted">

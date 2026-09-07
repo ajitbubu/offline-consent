@@ -6,6 +6,7 @@ import { requireStaff } from "@/lib/auth";
 import { searchPrincipals } from "@/lib/register";
 import { Badge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
+import { Callout } from "@/components/ui/callout";
 
 export const metadata: Metadata = { title: "Register" };
 
@@ -71,10 +72,10 @@ export default async function RegisterPage({
       </Panel>
 
       {searched && results.length === 0 && (
-        <p className="rounded-md bg-canvas px-3 py-2 text-sm text-muted">
+        <Callout tone="neutral" live="status">
           Nobody in the register matches “{q}”. Try a shorter name, or the other contact
           point.
-        </p>
+        </Callout>
       )}
 
       {results.length > 0 && (

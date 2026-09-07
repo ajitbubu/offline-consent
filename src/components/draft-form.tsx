@@ -6,6 +6,7 @@ import { AlertTriangle, Check, FileWarning, Info, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import type { NoticeSummary, Purpose } from "@/lib/catalogue";
 import type { DraftPayload } from "@/lib/intake";
@@ -279,13 +280,9 @@ export function DraftForm({
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className="flex flex-col gap-6">
         {banner && (
-          <p
-            role="alert"
-            className="flex items-start gap-2 rounded-md bg-red-soft px-3 py-2 text-sm text-red"
-          >
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+          <Callout tone="red" live="alert" icon={<AlertTriangle size={16} aria-hidden />}>
             {banner}
-          </p>
+          </Callout>
         )}
 
         {duplicates.length > 0 && (
@@ -458,11 +455,13 @@ export function DraftForm({
             <p className="mb-3 text-xs text-muted">Reading the scan…</p>
           )}
           {!extracting && extraction && (
-            <p className="mb-3 rounded-md bg-canvas px-3 py-2 text-xs text-muted">
-              Read from the scan by {extraction.engine} {extraction.engineVersion}. Every box
-              below is a suggestion until you confirm it — what you leave here is what gets
-              committed, not what the model proposed.
-            </p>
+            <div className="mb-3">
+              <Callout tone="neutral">
+                Read from the scan by {extraction.engine} {extraction.engineVersion}. Every
+                box below is a suggestion until you confirm it — what you leave here is what
+                gets committed, not what the model proposed.
+              </Callout>
+            </div>
           )}
           {payload.items.length === 0 ? (
             <p className="text-sm text-muted">

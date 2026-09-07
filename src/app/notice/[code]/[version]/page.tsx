@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { PublicShell } from "@/components/public-shell";
 import { query } from "@/lib/db";
+import { Callout } from "@/components/ui/callout";
 
 interface NoticeRow {
   title: string;
@@ -94,9 +95,9 @@ export default async function NoticePage({
         </section>
       )}
 
-      <p className="mt-10 rounded-md bg-canvas px-4 py-3 text-sm text-muted">
-        Questions or complaints: {notice.fiduciary_contact}
-      </p>
+      <div className="mt-10">
+        <Callout tone="neutral">Questions or complaints: {notice.fiduciary_contact}</Callout>
+      </div>
     </PublicShell>
   );
 }

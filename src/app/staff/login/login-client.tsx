@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { Field, Input } from "@/components/ui/field";
 
 export function LoginClient() {
@@ -59,9 +60,9 @@ export function LoginClient() {
         />
       </Field>
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+        <Callout tone="red" live="alert">
           {error}
-        </p>
+        </Callout>
       )}
       <Button type="submit" disabled={busy}>
         {busy ? "Signing in…" : "Sign in"}

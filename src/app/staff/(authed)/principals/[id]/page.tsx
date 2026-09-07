@@ -13,6 +13,7 @@ import {
 } from "@/lib/register";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { MergeForm } from "@/components/merge-form";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import {
   consentStatusLabels,
@@ -121,8 +122,7 @@ export default async function PrincipalPage({
       </div>
 
       {person.merged_into_id && (
-        <p className="flex items-start gap-2 rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
-          <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden />
+        <Callout tone="amber" icon={<ShieldAlert size={16} aria-hidden />}>
           <span>
             This identity was merged into{" "}
             <Link href={`/staff/principals/${person.merged_into_id}`} className="underline">
@@ -131,11 +131,11 @@ export default async function PrincipalPage({
             . Its artifacts stay here, because an artifact records what one piece of paper
             said. The portal resolves through the chain.
           </span>
-        </p>
+        </Callout>
       )}
 
       {absorbed.length > 0 && (
-        <p className="rounded-md bg-canvas px-3 py-2 text-sm text-muted">
+        <Callout tone="neutral">
           Absorbed {absorbed.length === 1 ? "identity" : "identities"}:{" "}
           {absorbed.map((a, i) => (
             <span key={a.id}>
@@ -145,7 +145,7 @@ export default async function PrincipalPage({
               </Link>
             </span>
           ))}
-        </p>
+        </Callout>
       )}
 
       {person.merged_into_id === null && (

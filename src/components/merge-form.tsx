@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Merge, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { Field, Input } from "@/components/ui/field";
 
 interface Candidate {
@@ -133,10 +134,10 @@ export function MergeForm({
 
       {chosen && (
         <>
-          <p className="rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
+          <Callout tone="amber">
             {absorbedName} will be folded into {chosen.fullName}. This cannot be undone from
             the interface.
-          </p>
+          </Callout>
           <Field
             label="Why are these the same person?"
             htmlFor="merge-reason"
@@ -153,9 +154,9 @@ export function MergeForm({
       )}
 
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+        <Callout tone="red" live="alert">
           {error}
-        </p>
+        </Callout>
       )}
 
       <div className="flex gap-2">

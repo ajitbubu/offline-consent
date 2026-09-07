@@ -70,6 +70,69 @@ def _score(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+def find_anchors(
+    tokens: list[Token],
+    label: str,
+    limit: int = 8,
+    bonus: Callable[[list[Token], int], float] | None = None,
+) -> list[tuple[float, tuple[int, int, int, int], int]]:
+    """Every plausible match for `label`, best first, as (score, box, end_index).
+
+    `find_anchor` returns only the winner, which is the right shape when the
+    only evidence is the text. It is the wrong shape when something ELSE on the
+    page can break the tie - and on a form something can: whether a place to
+    write follows. The SBI account-opening form says "Name" twice, once as the
+    field and once inside "Bank/Branch to affix rubber stamp of name and code
+    no.", and both score 1.00. Text alone cannot choose; the comb boxes beside
+    one of them can.
+
+    So candidates are returned and the caller decides. Non-overlapping only, so
+    eight candidates are eight different places on the page rather than eight
+    framings of the same words.
+    """
+    target = normalise(label)
+    if not target or not tokens:
+        return []
+
+    words = target.split()
+    widths = {max(1, len(words) + delta) for delta in (-2, -1, 0, 1, 2)}
+
+    scored: list[tuple[float, tuple[int, int, int, int], int]] = []
+    for width in sorted(widths):
+        for start in range(0, max(1, len(tokens) - width + 1)):
+            window = tokens[start : start + width]
+            if not window:
+                continue
+            candidate = normalise(" ".join(t.text for t in window))
+            if not candidate:
+                continue
+            score = _score(target, candidate)
+            if bonus is not None:
+                score += bonus(tokens, start + width)
+            box = (
+                min(t.bbox[0] for t in window),
+                min(t.bbox[1] for t in window),
+                max(t.bbox[2] for t in window),
+                max(t.bbox[3] for t in window),
+            )
+            scored.append((min(score, 1.0), box, start + width))
+
+    scored.sort(key=lambda c: (-c[0], -(c[1][2] - c[1][0])))
+
+    kept: list[tuple[float, tuple[int, int, int, int], int]] = []
+    for score, box, end in scored:
+        if any(_overlaps(box, k[1]) for k in kept):
+            continue
+        kept.append((score, box, end))
+        if len(kept) >= limit:
+            break
+    return kept
+
+
+def _overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
 def find_anchor(
     tokens: list[Token],
     label: str,

@@ -67,20 +67,23 @@ DEFAULT_PAGES = 2
 DPI = 200
 
 
-def pages_of(path: Path, limit: int) -> list[Page]:
+def pages_of(path: Path, limit: int) -> tuple[list[Page], dict[int, Image.Image]]:
+    """Pages AND the images they came from - the region test needs pixels."""
     engine = get_engine()
     out: list[Page] = []
+    images: dict[int, Image.Image] = {}
     doc = pymupdf.open(path)
     try:
         for index in range(min(limit, doc.page_count)):
             pix = doc[index].get_pixmap(dpi=DPI)
             image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+            images[index + 1] = image
             out.append(
                 Page(page=index + 1, width=image.width, height=image.height, tokens=engine.tokens(image))
             )
     finally:
         doc.close()
-    return out
+    return out, images
 
 
 def _anchor_is_labelled(page: Page, box: tuple[int, int, int, int]) -> bool:
@@ -151,13 +154,13 @@ def main() -> int:
         bank = path.parent.name if path.parent != root else "root"
         bank_totals[bank] += 1
         try:
-            pages = pages_of(path, page_limit)
+            pages, images = pages_of(path, page_limit)
         except Exception as error:  # a corrupt or encrypted PDF is data, not a crash
             failures["unreadable"].append(f"{path.name}: {error}")
             continue
         read_ok += 1
 
-        for result in fields_reader.read(pages, REQUESTS):
+        for result in fields_reader.read(pages, REQUESTS, images):
             if result.anchor_score < fields_reader.MIN_ANCHOR_SCORE:
                 failures[result.key].append(path.name)
                 continue

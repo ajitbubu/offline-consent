@@ -46,8 +46,14 @@ from __future__ import annotations
 
 import re
 
+from typing import TYPE_CHECKING
+
+from app import regions
 from app.contract import FieldRequest, FieldResult, Page, Token
-from app.tickbox import find_anchor
+
+if TYPE_CHECKING:  # pragma: no cover - import only for the type
+    from PIL.Image import Image
+from app.tickbox import find_anchor, find_anchors
 
 # Below this the printed label was not really found, so anything read beside it
 # would be a reading of an arbitrary patch of paper. Matches tickbox.py.
@@ -240,6 +246,31 @@ def _label_bonus(tokens: list[Token], end_index: int) -> float:
     return 0.0
 
 
+# How much a writable region beside a candidate is worth when choosing between
+# two matches that score the same on text alone. Large, because on the forms
+# where this matters the text scores are IDENTICAL (1.00 against "Name" both in
+# the field label and in "affix rubber stamp of name and code no."), and the
+# region is the only evidence that separates them.
+REGION_EVIDENCE_BONUS = 0.30
+# A candidate whose band is TEXT is prose or the next field. Penalised rather
+# than dropped, so a form whose fields are all crowded still returns something
+# for a human to correct rather than nothing.
+REGION_TEXT_PENALTY = 0.35
+
+
+def _band_right(
+    page: Page, box: tuple[int, int, int, int], page_width: int
+) -> tuple[int, int, int, int]:
+    """The strip where a value written beside this label would sit."""
+    height = max(1, box[3] - box[1])
+    return (
+        box[2] + 2,
+        max(0, box[1] - int(height * 0.5)),
+        min(page_width, box[2] + int(page_width * FIRST_GAP_LIMIT)),
+        box[3] + int(height * 0.5),
+    )
+
+
 def _best_anchor(
     pages: list[Page], labels: list[str]
 ) -> tuple[float, Page | None, tuple[int, int, int, int] | None]:
@@ -338,9 +369,51 @@ def _find_phone(pages: list[Page]) -> FieldResult | None:
     return None
 
 
-def _read_anchored(pages: list[Page], request: FieldRequest) -> FieldResult:
+def _best_anchor_with_regions(
+    pages: list[Page],
+    labels: list[str],
+    images: dict[int, "Image.Image"],
+) -> tuple[float, Page | None, tuple[int, int, int, int] | None]:
+    """Pick the anchor that has somewhere to write beside it.
+
+    Text score alone cannot separate a field label from the same words in a
+    sentence. This re-ranks the candidates by what follows them on the page: a
+    comb, a table cell or a ruled blank is evidence of a field; running text is
+    evidence of prose.
+    """
+    best = (0.0, None, None)
+    best_rank = -1.0
+
+    for page in pages:
+        image = images.get(page.page)
+        for label in labels:
+            for score, box, _end in find_anchors(page.tokens, label, bonus=_label_bonus):
+                if score < MIN_ANCHOR_SCORE:
+                    continue
+                rank = score
+                if image is not None:
+                    region = regions.classify(image, _band_right(page, box, page.width), page.tokens)
+                    if region.is_field:
+                        rank += REGION_EVIDENCE_BONUS
+                    elif region.kind == "text":
+                        rank -= REGION_TEXT_PENALTY
+                if rank > best_rank:
+                    best_rank, best = rank, (score, page, box)
+
+    return best
+
+
+def _read_anchored(
+    pages: list[Page],
+    request: FieldRequest,
+    images: dict[int, "Image"] | None = None,
+) -> FieldResult:
     """Locate the printed label, read the value beside it."""
-    score, page, box = _best_anchor(pages, request.labels)
+    score, page, box = (
+        _best_anchor_with_regions(pages, list(request.labels), images)
+        if images
+        else _best_anchor(pages, request.labels)
+    )
 
     if page is None or box is None or score < MIN_ANCHOR_SCORE:
         return FieldResult(
@@ -380,7 +453,11 @@ def _read_anchored(pages: list[Page], request: FieldRequest) -> FieldResult:
     )
 
 
-def read(pages: list[Page], requests: list[FieldRequest]) -> list[FieldResult]:
+def read(
+    pages: list[Page],
+    requests: list[FieldRequest],
+    images: dict[int, "Image"] | None = None,
+) -> list[FieldResult]:
     """One result per request, in the order asked for.
 
     A request always produces a result, even a failed one. Silence would be
@@ -396,7 +473,7 @@ def read(pages: list[Page], requests: list[FieldRequest]) -> list[FieldResult]:
             if found is not None:
                 results.append(found.model_copy(update={"key": request.key}))
                 continue
-            results.append(_read_anchored(pages, request))
+            results.append(_read_anchored(pages, request, images))
             continue
 
         if request.kind == "phone":
@@ -412,7 +489,7 @@ def read(pages: list[Page], requests: list[FieldRequest]) -> list[FieldResult]:
             # page-wide scan stays, but only as a FALLBACK for a form whose
             # label OCR could not read - and even then it is what it always was:
             # a suggestion a human confirms.
-            anchored = _read_anchored(pages, request)
+            anchored = _read_anchored(pages, request, images)
             if anchored.value and _plausible_phone(anchored.value):
                 results.append(anchored)
                 continue
@@ -423,7 +500,7 @@ def read(pages: list[Page], requests: list[FieldRequest]) -> list[FieldResult]:
             results.append(anchored)
             continue
 
-        results.append(_read_anchored(pages, request))
+        results.append(_read_anchored(pages, request, images))
 
     return results
 

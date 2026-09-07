@@ -112,7 +112,13 @@ async def extract(
         )
 
     readings = tickbox.read(pages, images, requests) if requests else []
-    field_readings = fields_reader.read(pages, field_requests) if field_requests else []
+    # Images, not just tokens: choosing between two identical text matches
+    # needs to see whether there are comb cells or an empty table cell beside
+    # each - the SBI form says "Name" in a field label and in "affix rubber
+    # stamp of name and code no.", and only the pixels separate them.
+    field_readings = (
+        fields_reader.read(pages, field_requests, images) if field_requests else []
+    )
 
     return ExtractResponse(
         engine=selected.name,

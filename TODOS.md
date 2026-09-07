@@ -60,8 +60,31 @@ prose. A metric that starts at 98% cannot show an improvement.
 too STRICT in the other direction: SBI prints "Mobile No." with a period and
 "Email ID" with nothing, and both are real fields. The truth is between the two.
 
-**What would make the number honest is the same thing that would make extraction
-work: detecting the VALUE REGION** - the comb boxes, rules and empty cells a
+**Done, and the number moved 18.0% -> 23.1%.** `ml/app/regions.py` classifies
+what sits beside a label - comb cells, a table cell, a ruled blank, running
+text, or nothing - and `fields.py` now uses it to CHOOSE the anchor rather than
+to check one after the fact. That ordering is the point: on the SBI form "Name"
+scores 1.00 both as the field label and inside "affix rubber stamp of name and
+code no.", so text can never separate them, but only one has fourteen comb
+cells beside it. Extraction now picks the field (x=117) instead of the rubber
+stamp (x=1341).
+
+Two things that had to be got right, both found by running it rather than by
+reasoning: comb detection must be tested BEFORE the text test, because SBI
+prints guide letters inside the cells (F I R S T N A M E) and the text test was
+throwing away the one field that most needed comb detection; and a cell wall
+only covers about 45% of a band positioned from the label's own glyph height,
+not the 60% first guessed - measured, zero columns cleared 0.6 and twenty-three
+cleared 0.4.
+
+**Still to do: the METRIC has not caught up.** The 23.1% is still counted by the
+punctuation test, so it undercounts SBI's "Mobile No." and "Email ID", which
+carry no colon. Switching the count to the region test is the next measurement
+change, and it will move the number again without the extractor changing.
+
+**The original note, kept because the reasoning still holds:** what makes the
+number honest is the same thing that makes extraction work - detecting the
+VALUE REGION - the comb boxes, rules and empty cells a
 value gets written into. A label followed by writable space is a field; a label
 followed by more words is prose. That is the next piece, and it is worth more
 than the layout model right now because it needs no corpus.

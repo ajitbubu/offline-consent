@@ -55,3 +55,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+
+# local development training data on doc folder.
+# BOTH spellings: the folder on disk is hyphenated, the original rule was
+# underscored, so 123MB of bank forms was queued to enter git history.
+docs/training_data/
+docs/training-data/

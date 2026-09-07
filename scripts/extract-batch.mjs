@@ -53,8 +53,8 @@ const EXTRACTION_SCHEMA_VERSION = 2;
 
 /** Kept in step with FIELD_REQUESTS in src/lib/extraction.ts. */
 const FIELD_REQUESTS = [
-  { key: "fullName", kind: "text", labels: ["Name of Applicant", "Name of Primary Depositor", "Applicant name", "Full name", "Name (Same as ID Proof)", "Member name", "Name"] },
-  { key: "phone", kind: "phone", labels: ["Mobile No", "Mobile number", "Mobile", "Phone", "Telephone", "Contact number", "Tel"] },
+  { key: "fullName", kind: "text", labels: ["Sole/First Holder Name", "Name of Applicant", "Name of Primary Depositor", "Applicant Name", "Name of the Enterprise/ Individual", "First Name", "Full name", "Name (Same as ID Proof)", "Member name", "Name"] },
+  { key: "phone", kind: "phone", labels: ["Mobile No", "Mobile Number", "Mobile", "Telephone No", "Telephone Number", "Phone No", "Phone", "Telephone", "Contact number", "Tel"] },
   { key: "email", kind: "email", labels: ["Email ID", "E-mail ID", "Email address", "Email", "E-mail"] },
   { key: "collectedOn", kind: "date", labels: ["Date (DD/MM/YYYY)", "Date signed", "Signed", "Dated", "Date"] },
 ];

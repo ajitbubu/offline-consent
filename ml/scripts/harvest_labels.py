@@ -62,6 +62,49 @@ def clean(text: str) -> str:
     return _SPACE.sub(" ", text).strip(" .:-–—")
 
 
+def table_labels_in(page: pymupdf.Page) -> set[str]:
+    """Field labels that live in a table cell, with no colon to give them away.
+
+    The line-based scan below only finds labels punctuated with a colon, which
+    systematically misses an entire geometry: SMBC's loan application puts
+    "Name of the Enterprise/ Individual" in one table cell and leaves the next
+    one empty, and nothing about that row contains a colon. Those forms
+    contributed no vocabulary at all, which is why the harvested anchor list
+    could not read them.
+
+    The rule is structural rather than textual: in a row, a cell with text
+    beside a cell that is EMPTY is a label and its answer space. A row where
+    both cells carry text is a heading or a two-column paragraph, not a field.
+    """
+    found: set[str] = set()
+    try:
+        tables = page.find_tables().tables
+    except Exception:
+        return found
+
+    for table in tables:
+        try:
+            rows = table.extract()
+        except Exception:
+            continue
+        for row in rows:
+            cells = [(c or "").strip() for c in row]
+            if len(cells) < 2:
+                continue
+            for i, cell in enumerate(cells):
+                if not cell or len(cell) > 70:
+                    continue
+                # Skip the numbering column ("1.", "2.") - it labels nothing.
+                if len(cell) <= 3 and cell.rstrip(".").isdigit():
+                    continue
+                rest = cells[i + 1 :]
+                if rest and all(c == "" for c in rest):
+                    label = clean(cell.replace("\n", " "))
+                    if 2 <= len(label) <= 70:
+                        found.add(label)
+    return found
+
+
 def labels_in(page: pymupdf.Page) -> set[str]:
     """Distinct label-shaped strings on one page."""
     found: set[str] = set()
@@ -121,6 +164,7 @@ def main() -> int:
         try:
             for index in range(doc.page_count):
                 seen |= labels_in(doc[index])
+                seen |= table_labels_in(doc[index])
         except Exception:
             failed += 1
             continue

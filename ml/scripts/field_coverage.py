@@ -32,6 +32,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import fields as fields_reader
+from app import regions
 from app.contract import FieldRequest, Page
 from app.engines import get_engine
 
@@ -42,9 +43,12 @@ REQUESTS = [
         key="fullName",
         kind="text",
         labels=[
+            "Sole/First Holder Name",
             "Name of Applicant",
             "Name of Primary Depositor",
-            "Applicant name",
+            "Applicant Name",
+            "Name of the Enterprise/ Individual",
+            "First Name",
             "Full name",
             "Name (Same as ID Proof)",
             "Member name",
@@ -54,7 +58,18 @@ REQUESTS = [
     FieldRequest(
         key="phone",
         kind="phone",
-        labels=["Mobile No", "Mobile number", "Mobile", "Phone", "Telephone", "Contact number", "Tel"],
+        labels=[
+            "Mobile No",
+            "Mobile Number",
+            "Mobile",
+            "Telephone No",
+            "Telephone Number",
+            "Phone No",
+            "Phone",
+            "Telephone",
+            "Contact number",
+            "Tel",
+        ],
     ),
     FieldRequest(key="email", kind="email", labels=["Email ID", "E-mail ID", "Email address", "Email", "E-mail"]),
     FieldRequest(key="collectedOn", kind="date", labels=["Date (DD/MM/YYYY)", "Date signed", "Signed", "Dated", "Date"]),
@@ -145,6 +160,13 @@ def main() -> int:
     # mandatory). That is the population a value can actually be read beside.
     located: dict[str, int] = defaultdict(int)
     labelled: dict[str, int] = defaultdict(int)
+    # The metric that is actually right, and the reason the other two are kept
+    # beside it: a field is a label with somewhere to write next to it. The
+    # punctuation test undercounts SBI's "Mobile No." and "Email ID" - real
+    # fields, no colon - and the loose test counts prose. Reporting all three
+    # makes it visible when a number moves because the EXTRACTOR improved
+    # rather than because the QUESTION changed.
+    regioned: dict[str, int] = defaultdict(int)
     per_bank: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     bank_totals: dict[str, int] = defaultdict(int)
     failures: dict[str, list[str]] = defaultdict(list)
@@ -166,11 +188,20 @@ def main() -> int:
                 continue
             located[result.key] += 1
 
-            # Did the anchor land on a punctuated label, or inside a sentence?
             page = next((p for p in pages if p.page == result.page), None)
-            if page is not None and result.bbox is not None:
-                if _anchor_is_labelled(page, result.bbox):
-                    labelled[result.key] += 1
+            if page is None or result.bbox is None:
+                continue
+
+            # Did the anchor land on a punctuated label, or inside a sentence?
+            if _anchor_is_labelled(page, result.bbox):
+                labelled[result.key] += 1
+
+            # Is there somewhere to write beside it? This is the one that counts.
+            image = images.get(result.page)
+            if image is not None:
+                band = fields_reader._band_right(page, result.bbox, page.width)
+                if regions.classify(image, band, page.tokens).is_field:
+                    regioned[result.key] += 1
                     per_bank[bank][result.key] += 1
 
         sys.stdout.write(".")
@@ -178,16 +209,16 @@ def main() -> int:
 
     print(f"\n\nRead {read_ok} of {len(pdfs)} forms.\n")
 
-    print(f"  {'field':<12} {'matched':>9}  {'ON A LABEL':>11}  (a match in prose is not a field)")
+    print(f"  {'field':<12} {'matched':>8} {'punctuated':>11} {'HAS REGION':>11}")
+    print(f"  {'':12} {'(loose)':>8} {'(old)':>11} {'(the metric)':>11}")
     current: dict[str, float] = {}
     for request in REQUESTS:
-        loose = located[request.key]
-        tight = labelled[request.key]
-        pct = (tight / read_ok * 100) if read_ok else 0.0
-        loose_pct = (loose / read_ok * 100) if read_ok else 0.0
+        loose_pct = (located[request.key] / read_ok * 100) if read_ok else 0.0
+        punct_pct = (labelled[request.key] / read_ok * 100) if read_ok else 0.0
+        pct = (regioned[request.key] / read_ok * 100) if read_ok else 0.0
         current[request.key] = round(pct, 1)
         bar = "#" * int(pct / 4)
-        print(f"  {request.key:<12} {loose_pct:8.1f}%  {pct:10.1f}%  {bar}")
+        print(f"  {request.key:<12} {loose_pct:7.1f}% {punct_pct:10.1f}% {pct:10.1f}%  {bar}")
 
     overall = round(sum(current.values()) / len(current), 1) if current else 0.0
     current["_overall"] = overall

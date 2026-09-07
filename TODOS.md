@@ -77,7 +77,29 @@ only covers about 45% of a band positioned from the label's own glyph height,
 not the 60% first guessed - measured, zero columns cleared 0.6 and twenty-three
 cleared 0.4.
 
-**Still to do: the METRIC has not caught up.** The 23.1% is still counted by the
+**The metric has caught up, and the honest figure is 33.2%.** The count is now
+"is there somewhere to write beside this label", not "is the label punctuated".
+That measurement change alone moved the reported number 23.1% -> 32.5% with the
+extractor untouched, which is why all three columns are printed side by side:
+matched (loose, ~98%, counts prose), punctuated (the old test), and HAS REGION
+(the one that counts).
+
+**Table-cell harvesting found a whole missing geometry.** The label harvester
+only matched colon-punctuated text, so forms that put a label in one table cell
+and leave the next empty - SMBC's entire loan application - contributed NO
+vocabulary at all. Reading table structure as well took the name vocabulary
+from 41 distinct labels to 131 and found "Name of the Enterprise/ Individual",
+"Sole/First Holder Name" and the First/Middle/Last split SBI uses. Feeding
+those back gave +0.7 overall (fullName +2.7, everything else flat).
+
+**Where the next gain is NOT.** Vocabulary is at diminishing returns: 90 new
+labels bought under a point. SMBC sits at 13 of 41 forms despite having the
+cleanest table geometry in the corpus, and its bands classify as `text` - the
+band is measured from the LABEL's glyph box, and in a table the value cell is a
+row tall and starts at a column boundary. Band geometry, not vocabulary, is the
+next lever.
+
+**Superseded note:** The 23.1% is still counted by the
 punctuation test, so it undercounts SBI's "Mobile No." and "Email ID", which
 carry no colon. Switching the count to the region test is the next measurement
 change, and it will move the number again without the extractor changing.

@@ -92,53 +92,19 @@ const FIELD_REQUESTS = [
   {
     key: "fullName",
     kind: "text",
-    // Ranked by how many of 146 real Indian bank forms use each spelling
-    // (harvested by ml/scripts/harvest_labels.py over docs/training-data).
-    // "Name" alone appears on 24 of them and is deliberately LAST: the anchor
-    // keeps the best-scoring label, and a bare "Name" matches the first word of
-    // "Name of Guarantor" perfectly - so the specific spellings must be present
-    // to outscore it on forms that carry several name fields. A form that only
-    // has somebody else's name will still anchor on it; that is what the review
-    // screen is for.
-    labels: [
-      "Name of Applicant",
-      "Name of Primary Depositor",
-      "Applicant name",
-      "Full name",
-      "Name (Same as ID Proof)",
-      "Member name",
-      "Name",
-    ],
+    // Harvested from 146 real Indian bank forms by ml/scripts/harvest_labels.py,
+    // which reads BOTH colon-punctuated labels and table-cell labels - the
+    // second sweep is what found SMBC's "Name of the Enterprise/ Individual",
+    // a whole geometry that contributed no vocabulary at all before.
+    // "Name" stays LAST: the anchor keeps the best-scoring label, and a bare
+    // "Name" matches the first word of "Name of Guarantor" perfectly.
+    // Guarantor, Co-Applicant and Second/Third Holder are deliberately absent -
+    // they are real labels on these forms and they are not the applicant.
+    labels: ["Sole/First Holder Name", "Name of Applicant", "Name of Primary Depositor", "Applicant Name", "Name of the Enterprise/ Individual", "First Name", "Full name", "Name (Same as ID Proof)", "Member name", "Name"],
   },
-  {
-    key: "phone",
-    kind: "phone",
-    // "Mobile No" leads at 8 forms, then "Phone" at 6 and "Mobile" at 5.
-    labels: [
-      "Mobile No",
-      "Mobile number",
-      "Mobile",
-      "Phone",
-      "Telephone",
-      "Contact number",
-      "Tel",
-    ],
-  },
-  {
-    key: "email",
-    kind: "email",
-    // Every casing and hyphenation appears in the corpus: Email, e-mail,
-    // E-mail ID, Email ID, Email Id. Matching is case-folded, so the variants
-    // that matter are the hyphen and the trailing ID.
-    labels: ["Email ID", "E-mail ID", "Email address", "Email", "E-mail"],
-  },
-  {
-    key: "collectedOn",
-    kind: "date",
-    // "Date" appears on 76 of 146 forms, almost always beside the signature at
-    // the foot of the form, which is exactly the date we want.
-    labels: ["Date (DD/MM/YYYY)", "Date signed", "Signed", "Dated", "Date"],
-  },
+  { key: "phone", kind: "phone", labels: ["Mobile No", "Mobile Number", "Mobile", "Telephone No", "Telephone Number", "Phone No", "Phone", "Telephone", "Contact number", "Tel"] },
+  { key: "email", kind: "email", labels: ["Email ID", "E-mail ID", "Email address", "Email", "E-mail"] },
+  { key: "collectedOn", kind: "date", labels: ["Date (DD/MM/YYYY)", "Date signed", "Signed", "Dated", "Date"] },
 ] as const;
 
 const FIELD_KEYS = new Set(FIELD_REQUESTS.map((f) => f.key));

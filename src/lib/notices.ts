@@ -13,7 +13,7 @@
  */
 import "server-only";
 import { writeAudit } from "@/lib/audit";
-import { pool, query, type Executor } from "@/lib/db";
+import { pool, type Executor } from "@/lib/db";
 
 export interface NoticeOwedRow {
   data_principal_id: string;
@@ -58,8 +58,8 @@ export async function loadNoticeQueue(executor: Executor = pool): Promise<Notice
   return rows;
 }
 
-export async function countNoticesOwed(): Promise<number> {
-  const { rows } = await query<{ n: string }>(
+export async function countNoticesOwed(executor: Executor = pool): Promise<number> {
+  const { rows } = await executor.query<{ n: string }>(
     `SELECT count(DISTINCT a.data_principal_id) AS n
        FROM consent_artifact a
        JOIN data_principal d ON d.id = a.data_principal_id

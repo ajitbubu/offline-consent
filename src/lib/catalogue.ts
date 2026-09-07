@@ -3,7 +3,7 @@
  * screens, the review screen and the public portal.
  */
 import "server-only";
-import { query } from "@/lib/db";
+import { pool, type Executor } from "@/lib/db";
 
 export interface Purpose {
   id: string;
@@ -23,8 +23,8 @@ export interface NoticeSummary {
   purposes: { purpose_id: string; printed_label: string; display_order: number }[];
 }
 
-export async function loadPurposes(): Promise<Purpose[]> {
-  const { rows } = await query<Purpose>(
+export async function loadPurposes(executor: Executor = pool): Promise<Purpose[]> {
+  const { rows } = await executor.query<Purpose>(
     `SELECT id, code, name, description, data_categories, display_order
        FROM purpose WHERE is_active ORDER BY display_order, name`,
   );
@@ -36,8 +36,8 @@ export async function loadPurposes(): Promise<Purpose[]> {
  * tick-box. The reviewer picks the version that matches the paper in front of
  * them, and those printed labels are what get stored verbatim on the artifact.
  */
-export async function loadNotices(): Promise<NoticeSummary[]> {
-  const { rows } = await query<NoticeSummary>(
+export async function loadNotices(executor: Executor = pool): Promise<NoticeSummary[]> {
+  const { rows } = await executor.query<NoticeSummary>(
     `SELECT n.id, n.code, n.version, n.language, n.form_label,
             COALESCE(
               json_agg(
@@ -67,8 +67,10 @@ export async function loadNotices(): Promise<NoticeSummary[]> {
  * Null when nothing is published yet, and the footer then omits the line rather
  * than inventing one.
  */
-export async function latestFiduciaryContact(): Promise<string | null> {
-  const { rows } = await query<{ fiduciary_contact: string }>(
+export async function latestFiduciaryContact(
+  executor: Executor = pool,
+): Promise<string | null> {
+  const { rows } = await executor.query<{ fiduciary_contact: string }>(
     `SELECT fiduciary_contact
        FROM consent_notice
       WHERE published_at IS NOT NULL

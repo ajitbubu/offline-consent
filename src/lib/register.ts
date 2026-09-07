@@ -7,7 +7,7 @@
  * writes a `staff_viewed_principal` entry. Nobody browses this anonymously.
  */
 import "server-only";
-import { pool, query, type Executor } from "@/lib/db";
+import { pool, type Executor } from "@/lib/db";
 import { normaliseEmail, normalisePhone } from "@/lib/phone";
 import type { ConsentStatus, IntakeMode, NoticeAtCollection } from "@/lib/consent";
 
@@ -113,8 +113,11 @@ export interface AuditRow {
   reason: string | null;
 }
 
-export async function loadPrincipal(id: string): Promise<PrincipalDetail | null> {
-  const { rows } = await query<PrincipalDetail>(
+export async function loadPrincipal(
+  id: string,
+  executor: Executor = pool,
+): Promise<PrincipalDetail | null> {
+  const { rows } = await executor.query<PrincipalDetail>(
     `SELECT id, full_name, phone_e164, email, merged_into_id, created_at,
             portal_tokens_valid_from
        FROM data_principal WHERE id = $1`,
@@ -124,8 +127,11 @@ export async function loadPrincipal(id: string): Promise<PrincipalDetail | null>
 }
 
 /** Identities that were folded INTO this one. The other half of the chain. */
-export async function loadAbsorbed(id: string): Promise<{ id: string; full_name: string }[]> {
-  const { rows } = await query<{ id: string; full_name: string }>(
+export async function loadAbsorbed(
+  id: string,
+  executor: Executor = pool,
+): Promise<{ id: string; full_name: string }[]> {
+  const { rows } = await executor.query<{ id: string; full_name: string }>(
     "SELECT id, full_name FROM data_principal WHERE merged_into_id = $1 ORDER BY full_name",
     [id],
   );
@@ -141,8 +147,11 @@ export async function loadAbsorbed(id: string): Promise<{ id: string; full_name:
  * this spans the whole chain, so a survivor's screen shows every piece of paper
  * that is now theirs rather than only the ones they signed under this id.
  */
-export async function chainMembers(id: string): Promise<string[]> {
-  const { rows } = await query<{ id: string }>(
+export async function chainMembers(
+  id: string,
+  executor: Executor = pool,
+): Promise<string[]> {
+  const { rows } = await executor.query<{ id: string }>(
     `WITH RECURSIVE chain(id, depth) AS (
        SELECT $1::uuid, 0
        UNION ALL
@@ -156,8 +165,11 @@ export async function chainMembers(id: string): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-export async function loadArtifacts(id: string): Promise<ArtifactRow[]> {
-  const { rows } = await query<ArtifactRow>(
+export async function loadArtifacts(
+  id: string,
+  executor: Executor = pool,
+): Promise<ArtifactRow[]> {
+  const { rows } = await executor.query<ArtifactRow>(
     `SELECT a.id,
             a.collected_on,
             a.collected_on_precision,
@@ -192,8 +204,11 @@ export async function loadArtifacts(id: string): Promise<ArtifactRow[]> {
   return rows;
 }
 
-export async function loadConsents(id: string): Promise<ConsentRow[]> {
-  const { rows } = await query<ConsentRow>(
+export async function loadConsents(
+  id: string,
+  executor: Executor = pool,
+): Promise<ConsentRow[]> {
+  const { rows } = await executor.query<ConsentRow>(
     `SELECT r.purpose_id, p.name AS purpose_name, r.status, r.consent_given_on,
             r.withdrawn_at, r.withdrawal_channel, r.version
        FROM consent_record r
@@ -214,8 +229,12 @@ export async function loadConsents(id: string): Promise<ConsentRow[]> {
  * loose rather than a foreign key - audit entries must outlive the rows they
  * describe.
  */
-export async function loadAuditTrail(id: string, limit = 200): Promise<AuditRow[]> {
-  const { rows } = await query<AuditRow>(
+export async function loadAuditTrail(
+  id: string,
+  limit = 200,
+  executor: Executor = pool,
+): Promise<AuditRow[]> {
+  const { rows } = await executor.query<AuditRow>(
     `SELECT l.id, l."timestamp", l.action, l.actor_type, l.compliance_tags,
             l.new_state, l.reason,
             s.full_name AS actor_name
@@ -251,8 +270,9 @@ export async function recordPrincipalView(
   principalId: string,
   staffId: string,
   detail: Record<string, unknown>,
+  executor: Executor = pool,
 ): Promise<void> {
-  await query(
+  await executor.query(
     `INSERT INTO audit_log (action, actor_type, actor_id, data_principal_id, new_state)
      SELECT 'staff_viewed_principal', 'staff', $2, $1, $3::jsonb
       WHERE NOT EXISTS (

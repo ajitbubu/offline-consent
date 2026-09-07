@@ -100,6 +100,9 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
 # separators people write. Validation proper happens in the app, which already
 # owns normalisePhone - this only has to FIND the candidate.
 _PHONE_DIGITS = re.compile(r"\d")
+# Indian mobiles are written as two or three groups, so a number spans at most
+# a handful of tokens. Named rather than inlined, like the digit bounds above.
+_MAX_PHONE_TOKENS = 4
 _MIN_PHONE_DIGITS = 10
 _MAX_PHONE_DIGITS = 13
 
@@ -175,6 +178,31 @@ def _looks_like_label(text: str) -> bool:
     """
     stripped = text.strip()
     return stripped.endswith(":") and len(stripped) > 1
+
+
+# What a value scores at most when it is not the shape the field asked for.
+# Below PREFILL_MIN_CONFIDENCE in the app (0.7) on purpose: such a read is shown
+# to the reviewer as something the scan offered, and never filled in for them.
+SHAPE_MISMATCH_CEILING = 0.35
+
+
+def _plausible_for_kind(kind: str, value: str) -> bool:
+    """Does the read look like the KIND of thing that was asked for?
+
+    Deliberately loose - this is a sanity floor, not validation. E.164
+    normalisation and date parsing happen in the app, which can refuse properly.
+    """
+    if kind == "phone":
+        return _plausible_phone(value)
+    if kind == "email":
+        return "@" in value
+    if kind == "date":
+        # Any date carries digits; "of Incorporation / Registration" does not.
+        return sum(c.isdigit() for c in value) >= 4
+    if kind == "text":
+        # A name is not a sentence, and not a single stray glyph.
+        return 1 < len(value) <= 70 and any(c.isalpha() for c in value)
+    return True
 
 
 def _plausible_phone(text: str) -> bool:
@@ -403,6 +431,47 @@ def _best_anchor_with_regions(
     return best
 
 
+def _all_phones(pages: list[Page]) -> list[FieldResult]:
+    """Every number-shaped run on the page, not merely the first.
+
+    Counting them is the point: one is an answer, several is a question nobody
+    asked this function to settle.
+    """
+    out: list[FieldResult] = []
+    for page in pages:
+        tokens = page.tokens
+        index = 0
+        while index < len(tokens):
+            run: list[Token] = []
+            digits = ""
+            for token in tokens[index : index + _MAX_PHONE_TOKENS]:
+                if any(c.isalpha() for c in token.text):
+                    break
+                run.append(token)
+                digits += _digits(token.text)
+                if len(digits) > _MAX_PHONE_DIGITS:
+                    break
+                if _MIN_PHONE_DIGITS <= len(digits) <= _MAX_PHONE_DIGITS:
+                    out.append(
+                        FieldResult(
+                            key="",
+                            value=" ".join(_clean(t.text) for t in run).strip(),
+                            confidence=_mean_confidence(run),
+                            anchor_score=1.0,
+                            method="pattern",
+                            page=page.page,
+                            bbox=_span_box(run),
+                        )
+                    )
+                    index += len(run)
+                    break
+            else:
+                index += 1
+                continue
+            index += 1
+    return out
+
+
 def _read_anchored(
     pages: list[Page],
     request: FieldRequest,
@@ -438,9 +507,19 @@ def _read_anchored(
             bbox=box,
         )
 
-    # The value is only as trustworthy as the weaker of two things: how sure we
-    # are that we found the right label, and how sure OCR is of the characters.
+    # The value is only as trustworthy as the WEAKEST of three things: how sure
+    # we are of the label, how sure OCR is of the characters, and whether what
+    # was read is the SHAPE the field asked for.
+    #
+    # The third was missing and it mattered. Confidence was measuring "did I
+    # read these characters correctly", which a clean read of the wrong text
+    # passes easily: on a real account-opening form the date field returned "of
+    # Incorporation / Registration" at 0.94 and the phone field returned "No" at
+    # 0.96 - both high enough to pre-fill a compliance record. A number that is
+    # not a number and a date that is not a date are not near misses.
     confidence = min(score, _mean_confidence(tokens))
+    if not _plausible_for_kind(request.kind, value):
+        confidence = min(confidence, SHAPE_MISMATCH_CEILING)
 
     return FieldResult(
         key=request.key,
@@ -493,9 +572,23 @@ def read(
             if anchored.value and _plausible_phone(anchored.value):
                 results.append(anchored)
                 continue
-            found = _find_phone(pages)
-            if found is not None:
-                results.append(found.model_copy(update={"key": request.key}))
+
+            # The page-wide scan is the fallback, and it is now allowed to
+            # answer ONLY when the page holds exactly one number-shaped run.
+            #
+            # It was returning the first 10-13 digit run it found, and on a real
+            # filled account-opening form that was the Customer Number
+            # (686868686868) - reported as the applicant's phone with full
+            # confidence. The same shape as the Aadhaar case: a page-wide scan
+            # cannot know which number is the one asked for, and on a form
+            # carrying several it will be wrong more often than right.
+            #
+            # Ambiguity now returns nothing. A missed field is visibly empty on
+            # the review screen and gets typed; a wrong one is a contact point
+            # that looks filled in and never reaches the person.
+            candidates = _all_phones(pages)
+            if len(candidates) == 1:
+                results.append(candidates[0].model_copy(update={"key": request.key}))
                 continue
             results.append(anchored)
             continue

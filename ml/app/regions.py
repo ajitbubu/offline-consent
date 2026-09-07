@@ -37,7 +37,7 @@ from PIL import Image
 
 from app.contract import Token
 
-RegionKind = Literal["comb", "cell", "rule", "open", "text"]
+RegionKind = Literal["comb", "cell", "rule", "filled", "open", "text"]
 
 # Ink is anything meaningfully darker than the paper. The paper level is
 # measured per band rather than assumed to be 255, so a grey or yellowed scan
@@ -54,6 +54,11 @@ RULE_MIN_WIDTH_FRACTION = 0.55
 COMB_MAX_SPACING_CV = 0.28
 COMB_MIN_CELLS = 4
 
+# At or above this many words, text in the band is prose or the next field's
+# label rather than a written answer. Measured against both: "Ajit Kumar Sahu"
+# is three, the SBI section header that kept winning is eleven.
+PROSE_MIN_WORDS = 5
+
 
 @dataclass
 class Region:
@@ -67,7 +72,7 @@ class Region:
     @property
     def writable(self) -> bool:
         """Could a value be written here at all?"""
-        return self.kind in ("comb", "cell", "rule", "open")
+        return self.kind in ("comb", "cell", "rule", "filled", "open")
 
     @property
     def is_field(self) -> bool:
@@ -77,7 +82,7 @@ class Region:
         look identical, so treating `open` as proof of a field would count every
         label near the edge of the page. It is writable but not evidence.
         """
-        return self.kind in ("comb", "cell", "rule")
+        return self.kind in ("comb", "cell", "rule", "filled")
 
 
 def _ink(image: Image.Image, box: tuple[int, int, int, int]) -> np.ndarray:
@@ -176,17 +181,40 @@ def classify(
     if _looks_like_comb(dividers):
         return Region("comb", (x0 + dividers[0], y0, x0 + dividers[-1], y1), len(dividers) - 1)
 
-    # 2. Words in the band, and no comb around them: prose, or the next field's
-    #    label. Either way not somewhere a value for THIS label goes.
+    # 2. PROSE in the band - not merely text.
     #
-    #    Single characters do not count. A lone "X" or a stray mark is what a
-    #    scan leaves in an empty box, and treating it as a word would reject
-    #    the box for containing evidence that it is a box.
-    for t in tokens:
-        cx = (t.bbox[0] + t.bbox[2]) / 2
-        cy = (t.bbox[1] + t.bbox[3]) / 2
-        if x0 <= cx <= x1 and y0 <= cy <= y1 and len(t.text.strip()) > 1:
+    #    The distinction cost three iterations to learn. The first version
+    #    called any text in the band prose, which is right on a blank form and
+    #    exactly wrong on a filled one: the band beside "Full name" contains
+    #    "Ajit Kumar Sahu", so the correct field was penalised and a spurious
+    #    "Name" sitting next to empty margin won instead. Optimising against
+    #    blank templates had produced a rule that harms the real case.
+    #
+    #    What separates them is length and run-on. A written value is short and
+    #    stops - three or four words at most. Prose is long and keeps going past
+    #    the band: "(All communications will be sent on provided Mobile
+    #    No./Email-ID)". So count the words, and check whether the text spills
+    #    out of the right edge.
+    inside = [
+        t
+        for t in tokens
+        if x0 <= (t.bbox[0] + t.bbox[2]) / 2 <= x1
+        and y0 <= (t.bbox[1] + t.bbox[3]) / 2 <= y1
+        and len(t.text.strip()) > 1
+    ]
+    if inside:
+        spills = any(t.bbox[2] > x1 for t in inside)
+        if len(inside) >= PROSE_MIN_WORDS or spills:
             return Region("text", None)
+        # Short, self-contained text beside a label IS the answer. Report it as
+        # a filled value region rather than as an obstacle.
+        span = (
+            min(t.bbox[0] for t in inside),
+            min(t.bbox[1] for t in inside),
+            max(t.bbox[2] for t in inside),
+            max(t.bbox[3] for t in inside),
+        )
+        return Region("filled", span)
 
     # 3. Long horizontal runs: a table cell (border above AND below) or a
     #    ruled blank (a single line, usually near the bottom).

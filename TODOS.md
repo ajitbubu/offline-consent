@@ -92,6 +92,38 @@ from 41 distinct labels to 131 and found "Name of the Enterprise/ Individual",
 "Sole/First Holder Name" and the First/Middle/Last split SBI uses. Feeding
 those back gave +0.7 overall (fullName +2.7, everything else flat).
 
+**THE CORRECTION THAT MATTERS: 33.2% coverage was 0% accuracy.** Two genuinely
+filled SMBC forms (AcroForm values, so the right answer is known) were run
+through extraction and got 0 of 6 fields right. Locating a label is not reading
+a value, and three iterations of tuning against BLANK templates had produced a
+rule that actively harms filled ones: the band beside "Full name" contains
+"Ajit Kumar Sahu", the classifier called any text in the band prose, and the
+correct field was penalised until a spurious "Name" next to empty margin
+outranked it. Blank forms were the wrong optimisation target and the metric
+never showed it.
+
+Fixed since: prose is now distinguished from a written answer by length and
+run-on (five or more words, or text spilling past the band); the page-wide phone
+scan refuses to answer when the page holds more than one number-shaped run (it
+had been returning the Customer Number, 686868686868, as the applicant's phone);
+and confidence now includes a SHAPE check, because it was measuring "did I read
+these characters correctly" - which a clean read of the wrong text passes. The
+date field returned "of Incorporation / Registration" at 0.94 and the phone
+returned "No" at 0.96, both above the 0.70 pre-fill floor. Both now cap at 0.35
+and are shown to the reviewer rather than filled in.
+
+Current state on those two forms: one field exactly right (a date, 01/10/00),
+one plausible name, and every garbage read correctly demoted below the pre-fill
+floor. Zero wrong pre-fills, which is the property that matters most; accuracy
+itself is still poor.
+
+**Still open, and now the real list.** The email was located correctly and
+tesseract misread "ajitbubu" as "i1tbubu" - an OCR quality limit, not a logic
+bug, and direct evidence for the local-versus-cloud decision in section 4. The
+FixedDeposit name is still missed entirely. And ground truth itself is partly
+guesswork: the widgets are named Text1 and Text9, so which is the applicant and
+which the father cannot be read off the file.
+
 **Where the next gain is NOT.** Vocabulary is at diminishing returns: 90 new
 labels bought under a point. SMBC sits at 13 of 41 forms despite having the
 cleanest table geometry in the corpus, and its bands classify as `text` - the

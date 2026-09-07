@@ -51,18 +51,39 @@ def test_guide_letters_inside_the_cells_do_not_make_it_text():
     assert regions.classify(image, (0, 0, 600, 60), letters).kind == "comb"
 
 
-def test_running_text_is_not_a_field():
-    image = _blank()
+def test_running_prose_is_not_a_field():
+    # The real sentence that kept winning on the SBI form: eleven words.
+    prose = "All communications will be sent on the provided Mobile No Email".split()
+    image = _blank(900, 60)
     draw = ImageDraw.Draw(image)
-    # Drawn as well as tokenised: tokens always come from ink on the same page,
-    # and a test that supplies one without the other is testing a state the
-    # pipeline cannot produce.
-    for x, word in ((30, "communications"), (200, "will"), (280, "be")):
-        draw.text((x, 20), word, fill=0)
-    words = [_tok("communications", 30, 20), _tok("will", 200, 20), _tok("be", 280, 20)]
-    region = regions.classify(image, (0, 0, 600, 60), words)
+    words = []
+    x = 20
+    for w in prose:
+        draw.text((x, 20), w, fill=0)
+        words.append(_tok(w, x, 20, len(w) * 7, 12))
+        x += len(w) * 7 + 8
+    region = regions.classify(image, (0, 0, 900, 60), words)
     assert region.kind == "text"
     assert not region.is_field
+
+
+def test_a_written_value_beside_a_label_is_a_field_not_prose():
+    # REGRESSION, and the one that cost the most. Three iterations were spent
+    # tuning against BLANK templates, where the answer space is empty - so any
+    # text in the band was called prose. On a filled form the band beside "Full
+    # name" contains "Ajit Kumar Sahu", and that rule penalised the correct
+    # field until a spurious "Name" next to empty margin outranked it.
+    image = _blank()
+    draw = ImageDraw.Draw(image)
+    words = []
+    x = 40
+    for w in ("Ajit", "Kumar", "Sahu"):
+        draw.text((x, 20), w, fill=0)
+        words.append(_tok(w, x, 20, len(w) * 8, 12))
+        x += len(w) * 8 + 10
+    region = regions.classify(image, (0, 0, 600, 60), words)
+    assert region.kind == "filled"
+    assert region.is_field, "a field with an answer in it is still a field"
 
 
 def test_a_single_stray_character_is_not_text():

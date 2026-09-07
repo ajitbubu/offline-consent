@@ -70,7 +70,27 @@ READ_RIGHT_SPAN = 0.6
 
 # A token counts as being on the same line when its vertical centre sits within
 # this fraction of the anchor's height from the anchor's centre.
-SAME_LINE_TOLERANCE = 0.6
+#
+# Asymmetric, because a written value sits LOWER than the label that introduces
+# it and never higher. That is geometry rather than handwriting habit: the
+# label's box is the tight bounds of printed x-height, while a written value
+# carries ascenders and descenders, so its box is taller and its centre falls
+# below. Measured on SMBC's fixed-deposit form, "Ajit Kumar Sahu" (box height
+# 31) sits +19px under "Full name of the Depositor" (box height 23), and the
+# next printed line is at +34.
+#
+# The symmetric 0.6 that stood here was tuned on the synthetic fixture, where
+# the label and value are drawn as ONE string and the offset is exactly zero.
+# It excluded the name on the only genuinely filled form in the corpus, by two
+# pixels, and reported the field as absent.
+SAME_LINE_ABOVE = 0.6
+SAME_LINE_BELOW = 0.9
+
+# A mark shorter than this fraction of the label's height is a speck on the
+# paper, not a character. The fixed-deposit scan carries a 3px artifact between
+# the label and the name, and OCR calls it "." - so the depositor's name came
+# back as "Ajit . Kumar Sahu". Real glyphs, including a comma, clear this.
+MIN_GLYPH_HEIGHT = 0.25
 
 # Two different gaps, and conflating them was a real bug.
 #
@@ -131,6 +151,89 @@ def _digits(text: str) -> str:
     return "".join(_PHONE_DIGITS.findall(text))
 
 
+# Words a printed label continues with, and a written value never starts with.
+#
+# The single biggest source of wrong reads, measured on filled forms. The anchor
+# list carries short fallbacks ("Name", "Date") because plenty of forms print
+# exactly that. On a form that prints something LONGER, the short entry still
+# matches - "Name" against "Name of the Applicant (remitter)" - and the reader
+# then hands back the REST OF THE LABEL as the value:
+#
+#     Name of the Applicant (remitter): Rajesh Venkataraman
+#     ^^^^ anchor stopped here
+#          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ returned as the name
+#
+# Measured on the SMBC corpus this produced "of the Applicant remitter)", "of
+# the Depositor(s)", "of Incorporation / Registration" and "of Birth" - four of
+# the six wrong values, all the same bug. Nothing about them looks like a
+# failure from the outside: the anchor score is high, OCR read the characters
+# perfectly, and the field is confidently filled with furniture.
+# How many words a label tail may run before we stop claiming to know where it
+# ends. "Full name of the Depositor." is four; a run longer than this is not a
+# label continuation any more, it is the rest of the form.
+_MAX_LABEL_TAIL = 6
+
+_LABEL_CONTINUES = frozenset(
+    {"of", "the", "a", "an", "as", "in", "on", "to", "for", "and", "or", "at", "by", "with"}
+)
+
+
+def _same_line_right(page: Page, anchor: tuple[int, int, int, int]) -> list[Token]:
+    """Tokens to the right of `anchor` on its line, left to right."""
+    height = _height(anchor)
+    centre = _centre_y(anchor)
+    limit_x = anchor[2] + page.width * READ_RIGHT_SPAN
+    candidates = [
+        t
+        for t in page.tokens
+        if _height(t.bbox) >= height * MIN_GLYPH_HEIGHT
+        and t.bbox[0] >= anchor[2]
+        and t.bbox[0] <= limit_x
+        and -height * SAME_LINE_ABOVE
+        <= _centre_y(t.bbox) - centre
+        <= height * SAME_LINE_BELOW
+    ]
+    candidates.sort(key=lambda t: t.bbox[0])
+    return candidates
+
+
+def _skip_label_tail(
+    candidates: list[Token], anchor_right: int, height: int
+) -> tuple[list[Token], int]:
+    """Drop the rest of the printed label, when the anchor only matched its start.
+
+    Fires only on positive evidence: the first token after the anchor is a
+    lowercase connector word. People do not begin a name, a number or a date
+    with "of" or "the", so this cannot eat a value - and when the anchor DID
+    match the whole label, the next token is the value and nothing is skipped.
+
+    Once triggered, the label runs to its natural end: a colon or asterisk, or
+    the wide gap a form leaves before the answer space.
+    """
+    if not candidates:
+        return candidates, anchor_right
+
+    first = candidates[0].text.strip().strip(":*").lower()
+    if first not in _LABEL_CONTINUES:
+        return candidates, anchor_right
+
+    previous_right = anchor_right
+    for index, token in enumerate(candidates[:_MAX_LABEL_TAIL]):
+        text = token.text.strip()
+        # A gap this wide is the space left for the answer: the label ended.
+        if token.bbox[0] - previous_right > height * VALUE_GAP_LIMIT:
+            return candidates[index:], previous_right
+        previous_right = token.bbox[2]
+        # Punctuation ends a printed label outright.
+        if text.endswith((":", "*", ".")):
+            return candidates[index + 1 :], previous_right
+
+    # The label ran on past anything that looks like an ending. Where it stops
+    # is now a guess, and a guess here picks somebody's name out of printed
+    # furniture - so this reads nothing and the reviewer types the field.
+    return [], previous_right
+
+
 def _read_right(page: Page, anchor: tuple[int, int, int, int]) -> list[Token]:
     """Tokens sitting to the right of `anchor` on the same line.
 
@@ -139,20 +242,11 @@ def _read_right(page: Page, anchor: tuple[int, int, int, int]) -> list[Token]:
     "Full name: Priya Sharma    Mobile: 98765" reads as one very long name.
     """
     height = _height(anchor)
-    centre = _centre_y(anchor)
-    limit_x = anchor[2] + page.width * READ_RIGHT_SPAN
-
-    candidates = [
-        t
-        for t in page.tokens
-        if t.bbox[0] >= anchor[2]
-        and t.bbox[0] <= limit_x
-        and abs(_centre_y(t.bbox) - centre) <= height * SAME_LINE_TOLERANCE
-    ]
-    candidates.sort(key=lambda t: t.bbox[0])
+    candidates, previous_right = _skip_label_tail(
+        _same_line_right(page, anchor), anchor[2], height
+    )
 
     out: list[Token] = []
-    previous_right = anchor[2]
     for token in candidates:
         # The label-to-value gap is measured against the page; the gap between
         # words of a value is measured against the type size.
@@ -225,6 +319,62 @@ def _looks_like_instruction(text: str) -> bool:
     return stripped.startswith("(") or stripped.startswith("[")
 
 
+# Kinds whose value has a shape you can check without knowing the answer.
+# A name does not - "Rajesh Venkataraman" and "of the Depositor(s)" are both
+# just words - so `text` is absent here on purpose.
+_SHAPED_KINDS = frozenset({"phone", "email", "date"})
+
+
+def _shaped(kind: str, tokens: list[Token]) -> list[Token] | None:
+    """The part of the band that is actually the shape asked for.
+
+    Reading the band left to right assumes the value starts where the label
+    stops. Often it does not: the form prints "Date of Birth / Incorporation"
+    or leaves a note between the label and the box, and the first thing beside
+    the anchor is not the answer.
+
+    So for a field with a checkable shape, FIND the answer in the band instead
+    of assuming its position. If the band holds nothing of that shape, the
+    honest result is None. It was previously returning the wrong text at capped
+    confidence, which is a worse failure than an empty field: "date: e-mail
+    address" on a review screen is noise a reviewer has to read and dismiss,
+    and it hides the fact that nothing was found.
+    """
+    if kind == "email":
+        for token in tokens:
+            if _EMAIL.search(token.text):
+                return [token]
+        return None
+
+    if kind == "phone":
+        for start in range(len(tokens)):
+            for span in range(1, _MAX_PHONE_TOKENS + 1):
+                run = tokens[start : start + span]
+                if len(run) < span:
+                    break
+                if _plausible_phone(" ".join(t.text for t in run)):
+                    return run
+        return None
+
+    if kind == "date":
+        # A date is digits and separators. Written as one token ("04/03/2019")
+        # or three ("04", "03", "2019"), so allow a short run - but require the
+        # run to be mostly digits, which "of Incorporation / Registration" and
+        # "indiacsd@in.smbc.co.jp" are not.
+        for start in range(len(tokens)):
+            for span in range(1, 4):
+                run = tokens[start : start + span]
+                if len(run) < span:
+                    break
+                text = "".join(t.text for t in run)
+                letters = sum(c.isalpha() for c in text)
+                if len(_digits(text)) >= 4 and letters <= 3:
+                    return run
+        return None
+
+    return tokens
+
+
 def _span_box(tokens: list[Token]) -> tuple[int, int, int, int] | None:
     if not tokens:
         return None
@@ -289,10 +439,23 @@ REGION_TEXT_PENALTY = 0.35
 def _band_right(
     page: Page, box: tuple[int, int, int, int], page_width: int
 ) -> tuple[int, int, int, int]:
-    """The strip where a value written beside this label would sit."""
+    """The strip where a value written beside this label would sit.
+
+    Measured from where the VALUE starts, not from where the anchor stopped,
+    and the difference decides which field wins. On SMBC's fixed-deposit form
+    the real field is "Full name of the Depositor". Anchoring on "Full name"
+    left "of the Depositor" sitting in the band, the classifier called it text,
+    and the correct field took the text penalty - so "CREDIT ACCOUNT NAME:" won
+    on punctuation and the depositor's name read as null.
+
+    A label's own continuation is not an obstacle in its answer space. Skipping
+    it here is the same rule `_read_right` already applies, applied to the
+    strip that CHOOSES the anchor rather than only to the one that reads it.
+    """
     height = max(1, box[3] - box[1])
+    _, start_x = _skip_label_tail(_same_line_right(page, box), box[2], height)
     return (
-        box[2] + 2,
+        start_x + 2,
         max(0, box[1] - int(height * 0.5)),
         min(page_width, box[2] + int(page_width * FIRST_GAP_LIMIT)),
         box[3] + int(height * 0.5),
@@ -330,37 +493,69 @@ def _best_anchor(
     return best_score, best_page, best_box
 
 
-def _find_email(pages: list[Page]) -> FieldResult | None:
-    """An address anywhere on the page. Self-identifying, so no anchor needed."""
+def _all_emails(pages: list[Page]) -> list[FieldResult]:
+    """Every distinct address on the page.
+
+    Deliberately not "the first address", which is what this used to return and
+    which is wrong on essentially every real bank form. The applicant's address
+    is not the first one printed - the bank's is. Measured on the corpus, a
+    page-wide first-match handed back `depository@pnb.bank.in`,
+    `suecontact@npci.org.in` and `sapcontact@npci.org.in` as the applicant's
+    email, each with anchor_score 1.00, because a pattern match cannot tell
+    whose address it found.
+
+    This is the same bug already fixed for phone numbers, where the page-wide
+    scan was returning the Aadhaar and then the Customer Number. The remedy is
+    the same: the printed label leads, and a page-wide scan may only answer
+    when the page holds exactly one candidate and there is nothing to confuse.
+    """
+    found: list[FieldResult] = []
+    seen: set[str] = set()
+
+    def add(value: str, tokens: list[Token], page: Page) -> None:
+        value = value.lower()
+        if value in seen:
+            return
+        seen.add(value)
+        box = _span_box(tokens)
+        found.append(
+            FieldResult(
+                key="",
+                value=value,
+                confidence=_mean_confidence(tokens),
+                anchor_score=1.0,
+                method="pattern",
+                page=page.page,
+                bbox=box,
+            )
+        )
+
     for page in pages:
         for index, token in enumerate(page.tokens):
             match = _EMAIL.search(token.text)
             if match:
-                return FieldResult(
-                    key="",
-                    value=match.group(0).lower(),
-                    confidence=token.confidence,
-                    anchor_score=1.0,
-                    method="pattern",
-                    page=page.page,
-                    bbox=token.bbox,
-                )
-            # OCR sometimes splits on the @, so try joining with the neighbour.
-            if index + 1 < len(page.tokens):
-                joined = token.text + page.tokens[index + 1].text
-                match = _EMAIL.search(joined)
-                if match:
-                    pair = [token, page.tokens[index + 1]]
-                    return FieldResult(
-                        key="",
-                        value=match.group(0).lower(),
-                        confidence=_mean_confidence(pair),
-                        anchor_score=1.0,
-                        method="pattern",
-                        page=page.page,
-                        bbox=_span_box(pair),
-                    )
-    return None
+                add(match.group(0), [token], page)
+                continue
+            # OCR sometimes splits on the @, so try joining with the neighbour -
+            # but ONLY when neither token is already a whole address.
+            #
+            # Without that guard the join manufactures candidates: the token
+            # before the address is "43210", and "43210priya.sharma@example.org"
+            # matches the pattern as a different string. One address on the page
+            # then counts as two, and the "exactly one candidate" rule below -
+            # the entire safety mechanism - never fires.
+            if index + 1 >= len(page.tokens):
+                continue
+            neighbour = page.tokens[index + 1]
+            if _EMAIL.search(neighbour.text):
+                continue
+            # A split happens within a line, not across one.
+            if abs(_centre_y(neighbour.bbox) - _centre_y(token.bbox)) > _height(token.bbox):
+                continue
+            match = _EMAIL.search(token.text + neighbour.text)
+            if match:
+                add(match.group(0), [token, neighbour], page)
+    return found
 
 
 def _find_phone(pages: list[Page]) -> FieldResult | None:
@@ -490,7 +685,41 @@ def _read_anchored(
         )
 
     tokens = _read_right(page, box)
+
+    # A comb band's words are the form's own guide letters, not an answer.
+    #
+    # SBI's account-opening form prints F I R S T  N A M E faintly inside the
+    # character cells, and OCR reads them perfectly well - so the name field
+    # came back as "MIDDLE NAME" with a strong anchor and clean characters.
+    # Nothing about that read looks wrong from the outside, and it would be
+    # pre-filled into a consent record as somebody's name.
+    #
+    # Reading the cells properly means OCR'ing each one as a single character,
+    # which the engine seam does not expose (it takes a page, returns words) and
+    # which local Tesseract is unlikely to manage regardless - it turned a
+    # handwritten "ajitbubu" into "i1tbubu" at full word size. So the value here
+    # is None: the field is visibly empty on the review screen and gets typed,
+    # instead of being confidently wrong. Comb READING stays open, and is the
+    # strongest argument in the corpus for the cloud engine.
+    if images is not None and tokens:
+        image = images.get(page.page)
+        if image is not None:
+            band = _band_right(page, box, page.width)
+            if regions.classify(image, band, page.tokens).kind == "comb":
+                tokens = []
+
+    if request.kind in _SHAPED_KINDS:
+        shaped = _shaped(request.kind, tokens)
+        tokens = shaped if shaped is not None else []
     value = _clean(" ".join(t.text for t in tokens))
+
+    # An address is the MATCH, not the token that carried it. OCR glues the
+    # rule a value sits on to the front of the word, and returning the token
+    # whole handed back "tD[rajepsh.v@example.org" - a string the app's own
+    # normalisation would then reject for a reason invisible from the scan.
+    if request.kind == "email" and value:
+        match = _EMAIL.search(value)
+        value = match.group(0).lower() if match else ""
 
     if not value:
         # The label was found and there was nothing beside it. That is a blank
@@ -546,13 +775,22 @@ def read(
 
     for request in requests:
         if request.kind == "email":
-            # An address is self-identifying: an @ is an @ wherever it sits, so
-            # the pattern is more reliable than a label OCR may have mangled.
-            found = _find_email(pages)
-            if found is not None:
-                results.append(found.model_copy(update={"key": request.key}))
+            # The printed label leads, exactly as it does for a phone number.
+            #
+            # An address IS self-identifying - an @ is an @ wherever it sits -
+            # and that is precisely why a page-wide scan is dangerous here: it
+            # finds the bank's address as confidently as the applicant's, and
+            # the bank's is printed first. See _all_emails.
+            anchored = _read_anchored(pages, request, images)
+            if anchored.value and "@" in anchored.value:
+                results.append(anchored)
                 continue
-            results.append(_read_anchored(pages, request, images))
+
+            candidates = _all_emails(pages)
+            if len(candidates) == 1:
+                results.append(candidates[0].model_copy(update={"key": request.key}))
+                continue
+            results.append(anchored)
             continue
 
         if request.kind == "phone":

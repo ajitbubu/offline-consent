@@ -16,7 +16,9 @@ from app import fields
 from app.contract import FieldRequest, Page
 from app.engines import get_engine
 
-from .conftest import build_form
+from PIL import ImageDraw
+
+from .conftest import _font, build_form
 
 NAME = FieldRequest(key="fullName", labels=["Full name", "Name"], kind="text")
 PHONE = FieldRequest(key="phone", labels=["Mobile", "Phone", "Mobile No"], kind="phone")
@@ -57,18 +59,53 @@ def test_the_name_does_not_swallow_the_next_field(clean_pages):
     assert "mobile" not in (result.value or "").lower()
 
 
-def test_finds_the_email_by_pattern_not_by_label(clean_pages):
+def test_reads_the_email_from_beside_its_printed_label(clean_pages):
     result = _by_key(fields.read(clean_pages, [EMAIL]), "email")
     # Asserting the SHAPE, not the exact characters: tesseract sometimes doubles
     # a letter on a rendered form, and OCR fidelity is a different test from
-    # "was an address found without relying on the word Email".
+    # "was the right address found".
     assert result.value is not None
     assert result.value.endswith("@example.org")
     assert result.value.startswith("priya")
-    # An address is self-identifying, so it should be found without relying on
-    # the word "Email" having survived OCR.
+
+
+def test_finds_the_only_address_on_a_form_that_never_says_email():
+    """The pattern fallback still works when the label is gone.
+
+    This is what makes an address different from a name: with no usable label,
+    a page carrying exactly ONE address can still be answered. The guard is
+    "exactly one" - see the next test for why.
+    """
+    image = build_form({0})
+    draw = ImageDraw.Draw(image)
+    # Paint over the printed "Email:" label, leaving the address alone.
+    draw.rectangle([135, 365, 300, 410], fill=255)
+    result = _by_key(fields.read(_pages(image), [EMAIL]), "email")
+    assert result.value is not None
+    assert result.value.endswith("@example.org")
     assert result.method == "pattern"
-    assert result.anchor_score == 1.0
+
+
+def test_does_not_return_the_banks_own_address_as_the_applicants():
+    """The bug this replaced a page-wide first-match to fix.
+
+    Every real bank form prints the bank's own address somewhere, usually
+    above the applicant's. Taking the first `@` on the page returned
+    `depository@pnb.bank.in` and `suecontact@npci.org.in` as the applicant's
+    email on the training corpus, at anchor_score 1.00 - a contact point that
+    looks filled in, is wrong, and never reaches the person.
+    """
+    image = build_form({0})
+    draw = ImageDraw.Draw(image)
+    # A footer address, exactly as a bank prints it - and ABOVE nothing, so a
+    # first-match scan that started at the top would still find the applicant.
+    # Put it in the header instead, where the scan reaches it first.
+    draw.text((900, 130), "queries@bank.example.com", font=_font(32), fill=0)
+
+    result = _by_key(fields.read(_pages(image), [EMAIL]), "email")
+    assert result.value is not None
+    assert "bank.example.com" not in result.value
+    assert result.value.startswith("priya")
 
 
 def test_finds_the_phone_across_split_tokens(clean_pages):
@@ -240,3 +277,62 @@ def test_confidence_never_exceeds_the_anchor(clean_pages):
     # evidence cannot support.
     result = _by_key(fields.read(clean_pages, [NAME]), "fullName")
     assert result.confidence <= result.anchor_score
+
+
+def test_a_comb_field_reads_null_rather_than_the_forms_guide_letters():
+    """REGRESSION. The printed guide inside character cells is not a name.
+
+    SBI's account-opening form prints F I R S T  N A M E faintly inside the
+    comb cells that a person writes their name into. OCR reads those guide
+    letters cleanly, so the name field came back as "MIDDLE NAME" with a strong
+    anchor score and high character confidence - a confident wrong answer, and
+    the kind that gets pre-filled into a consent record because nothing about
+    it looks like a failure.
+
+    Reading the cells themselves is still open work. Until it lands, an empty
+    field a reviewer types into beats a plausible name nobody wrote.
+    """
+    image = Image.new("L", (1400, 200), 255)
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 80), "Full name", font=_font(36), fill=0)
+
+    # 12 character cells, with the form's guide letters printed inside them.
+    left, cell, top, bottom = 460, 60, 70, 130
+    for i in range(13):
+        draw.line([left + i * cell, top, left + i * cell, bottom], fill=0, width=3)
+    for i, character in enumerate("FIRSTNAME"):
+        draw.text((left + i * cell + 20, top + 14), character, font=_font(28), fill=0)
+
+    pages = _pages(image)
+    result = _by_key(fields.read(pages, [NAME], {1: image}), "fullName")
+
+    assert result.anchor_score >= fields.MIN_ANCHOR_SCORE  # the label WAS found
+    assert result.value is None
+
+
+def test_reads_a_value_written_below_the_printed_labels_baseline():
+    """REGRESSION. A written value does not sit level with its label.
+
+    The label's box is the tight bounds of printed x-height; a written value
+    carries ascenders and descenders, so its box is taller and its centre falls
+    BELOW the label's. On SMBC's fixed-deposit form the depositor's name sits
+    19px under a 23px label, and a symmetric same-line tolerance of 0.6 excluded
+    it by two pixels - reporting the field as absent on the one genuinely filled
+    form in the corpus.
+
+    The synthetic fixture could never have caught this: it draws the label and
+    the value as a single string, so the offset is exactly zero.
+    """
+    image = Image.new("L", (1400, 260), 255)
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 60), "Full name", font=_font(34), fill=0)
+    # Written lower, as a person writing on the line below the caption does.
+    draw.text((460, 78), "Ajit Kumar Sahu", font=_font(38), fill=0)
+    # The next printed line, which must NOT be pulled in.
+    draw.text((60, 150), "Mobile:", font=_font(34), fill=0)
+
+    result = _by_key(fields.read(_pages(image), [NAME]), "fullName")
+
+    assert result.value is not None
+    assert "kumar" in result.value.lower()
+    assert "mobile" not in result.value.lower()

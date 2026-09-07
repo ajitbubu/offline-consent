@@ -112,29 +112,87 @@ date field returned "of Incorporation / Registration" at 0.94 and the phone
 returned "No" at 0.96, both above the 0.70 pre-fill floor. Both now cap at 0.35
 and are shown to the reviewer rather than filled in.
 
-Current state on those two forms: one field exactly right (a date, 01/10/00),
-one plausible name, and every garbage read correctly demoted below the pre-fill
-floor. Zero wrong pre-fills, which is the property that matters most; accuracy
-itself is still poor.
+**There is now an accuracy harness, and it is what to steer by.**
+`ml/scripts/field_accuracy.py` fills forms itself and checks what comes back.
+Ground truth comes from the form's own construction, never from OCR: the
+printed label is found in the PDF TEXT LAYER, and its answer box is either the
+fillable widget beside it or - on the far more numerous forms with no widgets -
+the EMPTY table cell beside it, the same structure `harvest_labels.py` already
+mines vocabulary from. A known value goes in, the page is rendered at 200 DPI,
+and extraction is scored against what was written.
 
-**Still open, and now the real list.** The email was located correctly and
-tesseract misread "ajitbubu" as "i1tbubu" - an OCR quality limit, not a logic
-bug, and direct evidence for the local-versus-cloud decision in section 4. The
-FixedDeposit name is still missed entirely. And ground truth itself is partly
-guesswork: the widgets are named Text1 and Text9, so which is the applicant and
-which the father cannot be read off the file.
+Two rules make the number trustworthy. A key is only planted where its label is
+UNIQUE in the document - "Date" appears twenty times on an account-opening form,
+and marking a correct read of a different date as wrong is the harness inventing
+failures. And a value OCR never resolved anywhere on the page is reported
+separately as `no-ocr` rather than counted against extraction, because a
+character-recognition limit and a location failure need opposite fixes.
+
+    27 scored fields, 37 forms:  59.3% right, 2 wrong
+    fullName 50%  phone 100%  email 28.6%  collectedOn 60%
+    (was 41.7% with 5 wrong when the harness only used widgets)
+
+Blank-form coverage moved with it, 32.5% -> 79.0%, and that jump is mostly
+measurement rather than magic: a shaped field with nothing beside it now
+correctly reports "label found, no value" instead of returning the label's own
+tail, so the band gets measured from the right place.
+
+**What was wrong, and is now fixed.** All six found by the accuracy harness, all
+invisible from the outside - high anchor score, clean characters, wrong answer.
+
+- *The anchor matched a PREFIX of a longer printed label and the rest of the
+  label became the value.* "Date of Incorporation / Registration" returned "of
+  Incorporation / Registration"; "Name of the Applicant (remitter)" returned "of
+  the Applicant remitter)". Four of six misreads, one bug. A label's
+  continuation is now skipped, on the positive evidence that a value never
+  begins with "of" or "the".
+- *The same bug in SCORING, not just reading.* The band that CHOOSES an anchor
+  was measured from where the anchor stopped, so a label's own tail sat in its
+  answer space, classified as text, and took the penalty - "CREDIT ACCOUNT NAME:"
+  beat "Full name of the Depositor" on punctuation and the name read as null.
+- *A page-wide email scan returned the BANK'S address as the applicant's.*
+  `depository@pnb.bank.in`, `suecontact@npci.org.in`, each at anchor 1.00. The
+  applicant's address is never the first one printed. This is the Aadhaar bug
+  again and it now has the Aadhaar fix: the label leads, and the page-wide scan
+  answers only when the page holds exactly one candidate.
+- *A shaped field returned the wrong shape rather than nothing.* phone, email
+  and date now FIND their shape in the band instead of assuming the value starts
+  where the label stops, and return None when the band holds nothing of it.
+- *Comb cells returned the form's own guide letters as a name.* SBI prints
+  F I R S T  N A M E faintly inside the character cells; OCR reads them, so the
+  name field came back "MIDDLE NAME". A comb band's words are now never a value.
+- *A written value sits BELOW the label that introduces it.* Geometry, not
+  habit: the label's box is tight printed x-height, a written value carries
+  ascenders and descenders, so its box is taller and its centre falls lower.
+  "Ajit Kumar Sahu" sits +19px under a 23px label and the symmetric ±0.6
+  tolerance excluded it BY TWO PIXELS. The synthetic fixture could never have
+  caught this - it draws label and value as one string, so the offset is zero.
+
+Both genuinely filled forms now read the applicant's name correctly:
+`AJIT KUMAR SAHU` at 0.93 and `Ajit Kumar Sahu` at 0.95, plus the date at 0.96.
+
+**Still open, in priority order.**
+
+1. *The extractor can pick the wrong PERSON.* On SMBC's A2 form it anchors on
+   "Beneficiary's Name" and returns "As per Application Form". Reading the
+   beneficiary as the data principal is the same class of harm as reading the
+   Aadhaar as the phone. `harvest_labels._NOT_THE_APPLICANT` already encodes the
+   vocabulary (guarantor, nominee, witness, father, spouse); the app's anchor
+   list does not use it. This is the next change and it is well evidenced.
+2. *Comb READING.* Detection works; extracting a value from the cells does not,
+   and it needs per-cell single-character OCR that the engine seam does not
+   expose - it takes a page and returns words. Local tesseract turned a
+   handwritten "ajitbubu" into "i1tbubu" at full word size, so it is unlikely to
+   read single cells either. This is the strongest argument in the corpus for
+   the cloud engine in section 4.
+3. *OCR character quality.* `rajesh.v@example.org` came back
+   `rajepsh.v@example.org` - located perfectly, read imperfectly. Also section 4.
+4. *40 of 67 planted values are `no-ocr`* - tesseract cannot resolve 8pt text at
+   200 DPI in a narrow table cell. That caps how much this harness can measure,
+   and it is the same limit real scans will hit.
 
 **Where the next gain is NOT.** Vocabulary is at diminishing returns: 90 new
-labels bought under a point. SMBC sits at 13 of 41 forms despite having the
-cleanest table geometry in the corpus, and its bands classify as `text` - the
-band is measured from the LABEL's glyph box, and in a table the value cell is a
-row tall and starts at a column boundary. Band geometry, not vocabulary, is the
-next lever.
-
-**Superseded note:** The 23.1% is still counted by the
-punctuation test, so it undercounts SBI's "Mobile No." and "Email ID", which
-carry no colon. Switching the count to the region test is the next measurement
-change, and it will move the number again without the extractor changing.
+labels bought under a point.
 
 **The original note, kept because the reasoning still holds:** what makes the
 number honest is the same thing that makes extraction work - detecting the

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BellRing, CopyCheck, FileText, Inbox, LayoutDashboard, LogOut, OctagonX, Users } from "lucide-react";
+import { BellRing, CopyCheck, FileText, Inbox, LayoutDashboard, LifeBuoy, LogOut, OctagonX, Users } from "lucide-react";
 import { roleAtLeast, staffRoleLabels, type StaffRole } from "@/lib/consent";
 
 /**
@@ -26,6 +26,7 @@ const LINKS = [
   { href: "/staff/duplicates", label: "Duplicates", icon: CopyCheck, minimum: "dpo", group: "dpo" },
   { href: "/staff/notices", label: "Notices", icon: BellRing, minimum: "dpo", group: "dpo" },
   { href: "/staff/cessation", label: "Stop processing", icon: OctagonX, minimum: "dpo", group: "dpo" },
+  { href: "/staff/lookup-requests", label: "Help requests", icon: LifeBuoy, minimum: "dpo", group: "dpo" },
 ] as const;
 
 export function StaffNav({ role }: { role: StaffRole }) {
@@ -44,28 +45,47 @@ export function StaffNav({ role }: { role: StaffRole }) {
   return (
     <header className="border-b border-line bg-panel">
       {/*
-        The nav has no breakpoint of its own, so wordmark + four icon links +
-        role + sign-out pushed the document to 675px wide inside a 375px
-        viewport and the whole console scrolled sideways on a phone.
-        The scroller is the NAV, not the row. Putting overflow-x-auto on the
-        outer row made the wordmark and Sign out part of the scrolled content, so
-        on a phone Sign out collided with the last nav icon and the page still
-        carried sixty pixels of phantom width. Only the links scroll now; the
-        wordmark stays on the left and Sign out stays reachable on the right,
-        which is the point of having it there.
+        The nav gets its OWN ROW. It did not, and could not fit.
 
-        min-w-0 goes with it: a flex-1 child defaults to min-width:auto and
-        refuses to shrink below its content, which is what pushed the root scroll
-        width out even though every box measured the right size.
+        Sharing one row with the wordmark, the role label and Sign out left the
+        links 714px inside a 1152px container, while eight links measure 890px.
+        The scroller hid the difference rather than reporting it: "Stop
+        processing" was clipped mid-word and "Help requests" sat entirely past
+        the right edge, on a 1440px desktop with 260px of unused row above it.
+        A horizontal scroller with no affordance is not a way to reach a link,
+        it is a way to not know the link exists - and both of the ones being
+        hidden were compliance queues with people waiting in them.
+
+        Two rows costs about 45px of header and gives the links the full
+        container width at every size. It also keeps what the previous fix was
+        protecting: the wordmark stays left, Sign out stays right and reachable,
+        and the NAV is still the only thing that scrolls, so a phone never
+        drags the whole console sideways.
+
+        min-w-0 stays: a flex child defaults to min-width:auto and refuses to
+        shrink below its content, which is what pushed the root scroll width out
+        even though every box measured the right size.
 
         Labels drop below sm so the icons still identify each link; the
         accessible name comes from aria-label rather than a hidden span.
       */}
-      <div className="mx-auto flex w-full max-w-6xl items-center gap-4 px-6 sm:gap-6">
-        <span className="shrink-0 py-4 text-sm font-semibold text-ink">Consent register</span>
+      <div className="mx-auto w-full max-w-6xl px-6">
+        <div className="flex items-center gap-4 pt-4 sm:gap-6">
+          <span className="shrink-0 text-sm font-semibold text-ink">Consent register</span>
+          <span className="ml-auto hidden shrink-0 text-xs text-muted sm:inline">
+            {staffRoleLabels[role]}
+          </span>
+          <button
+            onClick={signOut}
+            className="flex shrink-0 items-center gap-1.5 text-sm text-muted hover:text-ink"
+          >
+            <LogOut size={15} aria-hidden />
+            Sign out
+          </button>
+        </div>
         <nav
           aria-label="Staff sections"
-          className="flex min-w-0 flex-1 items-center overflow-x-auto"
+          className="flex min-w-0 w-full items-center overflow-x-auto"
         >
           {LINKS.filter((l) => roleAtLeast(role, l.minimum)).map((link, i, shown) => {
             const startsGroup = i > 0 && shown[i - 1].group !== link.group;
@@ -102,16 +122,6 @@ export function StaffNav({ role }: { role: StaffRole }) {
             );
           })}
         </nav>
-        <span className="hidden shrink-0 text-xs text-muted sm:inline">
-          {staffRoleLabels[role]}
-        </span>
-        <button
-          onClick={signOut}
-          className="flex shrink-0 items-center gap-1.5 text-sm text-muted hover:text-ink"
-        >
-          <LogOut size={15} aria-hidden />
-          Sign out
-        </button>
       </div>
     </header>
   );

@@ -6,6 +6,8 @@ import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import { roleAtLeast } from "@/lib/consent";
 import { corpusStatus } from "@/lib/training";
+import { extractionConfigured } from "@/lib/extraction";
+import { countOpenLookupRequests } from "@/lib/lookup";
 
 export const metadata: Metadata = { title: "Overview" };
 
@@ -70,7 +72,12 @@ function Stat({
 
 export default async function StaffOverviewPage() {
   const staff = await requireStaff();
-  const [counts, corpus] = await Promise.all([loadCounts(), corpusStatus()]);
+  const extractionAvailable = extractionConfigured();
+  const [counts, corpus, lookups] = await Promise.all([
+    loadCounts(),
+    corpusStatus(),
+    countOpenLookupRequests(),
+  ]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -151,15 +158,54 @@ export default async function StaffOverviewPage() {
           </li>
         </ol>
         {roleAtLeast(staff.role, "dpo") && (
-          <p className="mt-4 rounded-md bg-canvas px-3 py-2 text-sm text-muted">
-            Extraction corpus: <strong className="text-ink">{corpus.pairs}</strong> of{" "}
-            {corpus.target} scans needed before a text model is worth training.{" "}
-            {corpus.ready
-              ? "Enough to try."
-              : corpus.missedPairs > 0
-                ? `${corpus.missedPairs} committed scan${corpus.missedPairs === 1 ? " carries" : "s carry"} no OCR tokens — ${corpus.missedPairs === 1 ? "that pair is" : "those pairs are"} gone. Set ML_SERVICE_URL so the rest are banked.`
-                : "Every scan reviewed without the extraction service running is a pair lost for good."}
-          </p>
+          <div className="mt-4">
+            {/* The count of lost pairs is HISTORY and never falls, so it must
+                not carry the instruction. Told together, "N pairs are gone, set
+                ML_SERVICE_URL" kept telling an operator to set a variable that
+                was already set, on every visit, forever - and an instruction
+                that is permanently wrong is how people learn to skip the line
+                that matters. The fact is stated once; the advice is shown only
+                while it is still true. */}
+            <Callout tone="neutral">
+              Extraction corpus: <strong className="text-ink">{corpus.pairs}</strong> of{" "}
+              {corpus.target} scans needed before a text model is worth training.{" "}
+              {corpus.ready && "Enough to try."}
+              {!corpus.ready && extractionAvailable
+                ? "Tokens are being banked on every scan from here."
+                : null}
+              {!corpus.ready && !extractionAvailable
+                ? "ML_SERVICE_URL is not set, so every scan reviewed now is a pair lost for good."
+                : null}
+              {corpus.missedPairs > 0 && (
+                <>
+                  {" "}
+                  {corpus.missedPairs} committed scan
+                  {corpus.missedPairs === 1 ? " carries" : "s carry"} no OCR tokens;{" "}
+                  {corpus.missedPairs === 1 ? "that pair is" : "those pairs are"} gone.
+                </>
+              )}
+            </Callout>
+          </div>
+        )}
+
+        {roleAtLeast(staff.role, "dpo") && lookups.open > 0 && (
+          <div className="mt-4">
+            {/* Not a stat tile. Everyone counted here has told us they cannot
+                reach their own record, so this is an exception to work rather
+                than a number to watch - and if their form was mistyped, this
+                queue is the only route they have left to s.6(4). */}
+            <Callout tone={lookups.stale > 0 ? "red" : "amber"}>
+              {lookups.open} {lookups.open === 1 ? "person" : "people"} could not find their
+              record and asked for help
+              {lookups.stale > 0
+                ? `, and ${lookups.stale} ${lookups.stale === 1 ? "has" : "have"} been waiting over a week`
+                : ""}
+              .{" "}
+              <Link href="/staff/lookup-requests" className="font-medium text-blue hover:underline">
+                Work the queue
+              </Link>
+            </Callout>
+          </div>
         )}
 
         {counts.undated_forms !== "0" && (

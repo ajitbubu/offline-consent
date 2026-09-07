@@ -260,11 +260,13 @@ export function WithdrawClient() {
         )}
         {/* s.6(5) says withdrawal has no effect on processing already carried
             out. Saying so plainly is more honest than implying deletion. */}
-        <p hidden={!somethingHappened} className="rounded-md bg-canvas px-4 py-3 text-sm text-muted">
-          Withdrawing consent does not undo anything we did with your data before now,
-          and it is not the same as deleting your data. If you want your data erased,
-          that is a separate request — contact us and we will handle it.
-        </p>
+        <div hidden={!somethingHappened}>
+          <Callout tone="neutral">
+            Withdrawing consent does not undo anything we did with your data before now,
+            and it is not the same as deleting your data. If you want your data erased,
+            that is a separate request — contact us and we will handle it.
+          </Callout>
+        </div>
         <Link href="/" className="text-sm text-blue hover:underline">
           Back to the start
         </Link>
@@ -347,9 +349,9 @@ export function WithdrawClient() {
         </ul>
 
         {error && (
-          <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+          <Callout tone="red" live="alert">
             {error}
-          </p>
+          </Callout>
         )}
 
         {active.length === 0 ? (
@@ -392,9 +394,9 @@ export function WithdrawClient() {
           ))}
         </ul>
         {error && (
-          <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+          <Callout tone="red" live="alert">
             {error}
-          </p>
+          </Callout>
         )}
       </div>
     );
@@ -461,9 +463,9 @@ export function WithdrawClient() {
       </Field>
 
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+        <Callout tone="red" live="alert">
           {error}
-        </p>
+        </Callout>
       )}
 
       <Button disabled={busy || destination.trim().length < 3} onClick={requestCode}>
@@ -501,12 +503,13 @@ function LookupRequest({ onDone }: { onDone: () => void }) {
   const [contactNote, setContactNote] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (sent) {
     return (
-      <p className="rounded-md bg-green-soft px-3 py-2 text-sm text-green">
+      <Callout tone="green" live="status">
         Thank you. Someone will get in touch to find your record.
-      </p>
+      </Callout>
     );
   }
 
@@ -531,17 +534,38 @@ function LookupRequest({ onDone }: { onDone: () => void }) {
           placeholder="A phone number or email that works, and anything you remember"
         />
       </Field>
+      {error && (
+        <Callout tone="red" live="alert">
+          {error}
+        </Callout>
+      )}
       <div className="flex gap-2">
         <Button
           disabled={busy || claimedName.trim().length < 2 || contactNote.trim().length < 5}
           onClick={async () => {
             setBusy(true);
+            setError(null);
             try {
-              await fetch("/api/portal/lookup-request", {
+              // The response is READ, not discarded. This call could already
+              // fail - a mistyped Origin, a 500 - and now it can also come back
+              // 429 with a message the route composed deliberately. Showing
+              // "Thank you. Someone will get in touch" over any of those is the
+              // precise failure this whole table exists to prevent: a person
+              // believing they reached a human when no row was written, on the
+              // last route they have to s.6(4).
+              const response = await fetch("/api/portal/lookup-request", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ claimedName, contactNote, formReference: null }),
               });
+              const body = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                setError(
+                  body.error ??
+                    "We could not send that just now. Please try again in a moment.",
+                );
+                return;
+              }
               setSent(true);
             } finally {
               setBusy(false);

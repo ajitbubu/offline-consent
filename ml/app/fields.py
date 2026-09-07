@@ -316,7 +316,13 @@ def _looks_like_instruction(text: str) -> bool:
     person filling one in does not write their name in brackets.
     """
     stripped = text.strip()
-    return stripped.startswith("(") or stripped.startswith("[")
+    if stripped.startswith("(") or stripped.startswith("["):
+        return True
+    # A closing bracket with no opener means we are INSIDE a parenthetical that
+    # began in the printed label - OCR routinely loses the opening glyph, and
+    # without this "Name of the Applicant (remitter)" returned "remitter)" as
+    # somebody's name. Nobody writes their name with a trailing bracket.
+    return stripped.endswith((")", "]")) and not any(c in stripped for c in "([")
 
 
 # Kinds whose value has a shape you can check without knowing the answer.
@@ -462,6 +468,64 @@ def _band_right(
     )
 
 
+# Words that say the name beside them belongs to SOMEBODY ELSE.
+#
+# A consent record names the data principal. Anchoring on any of these puts a
+# different person's name, number or address into it - which is the same harm
+# as the page-wide scan that returned the applicant's Aadhaar as their phone,
+# arriving by a different route. Found on SMBC's A2 form, where the extractor
+# anchored on "Beneficiary's Name" and returned the printed cross-reference
+# beside it at full anchor score.
+#
+# The vocabulary is the one `scripts/harvest_labels.py` already mines the
+# corpus with, narrowed to OTHER PEOPLE: that file also excludes "branch" and
+# "city", which are not the applicant but are not a person either, and have no
+# business rejecting an anchor.
+#
+# "Remitter" is deliberately absent. SMBC prints "Name of the Applicant
+# (remitter)", where the remitter IS the applicant.
+_ANOTHER_PERSON = re.compile(
+    r"\b(beneficiar(?:y|ies)|guarantor|co[\s\-]?applicant|nominee|witness|"
+    r"father|mother|spouse|guardian|second\s+holder|third\s+holder|"
+    r"joint\s+holder|authorised\s+signator)",
+    re.I,
+)
+
+# How far left of an anchor to read when asking whose field this is, as a
+# fraction of page width. A qualifier sits immediately before the label it
+# qualifies; beyond this is the other column of a two-column form.
+QUALIFIER_LOOKBEHIND = 0.25
+
+
+def _names_another_person(page: Page, box: tuple[int, int, int, int]) -> bool:
+    """Does the label this anchor sits in belong to someone other than the applicant?
+
+    The qualifier can sit on either side of the matched words, so both are read:
+    "Beneficiary's Name" puts it before, "Name of Guarantor" puts it after. The
+    part after is exactly the label tail `_skip_label_tail` already identifies,
+    so it is asked rather than re-derived.
+    """
+    height = _height(box)
+    centre = _centre_y(box)
+    left_limit = box[0] - page.width * QUALIFIER_LOOKBEHIND
+    before = [
+        t
+        for t in page.tokens
+        if t.bbox[2] <= box[2]
+        and t.bbox[2] >= left_limit
+        and abs(_centre_y(t.bbox) - centre) <= height * SAME_LINE_ABOVE
+    ]
+    before.sort(key=lambda t: t.bbox[0])
+
+    # Whatever the label runs on into, before its answer space begins.
+    right = _same_line_right(page, box)
+    kept, _ = _skip_label_tail(right, box[2], height)
+    tail = right[: len(right) - len(kept)]
+
+    label = " ".join(t.text for t in before + tail)
+    return bool(_ANOTHER_PERSON.search(label))
+
+
 def _best_anchor(
     pages: list[Page], labels: list[str]
 ) -> tuple[float, Page | None, tuple[int, int, int, int] | None]:
@@ -484,7 +548,7 @@ def _best_anchor(
     for page in pages:
         for label in labels:
             score, box = find_anchor(page.tokens, label, _label_bonus)
-            if box is None:
+            if box is None or _names_another_person(page, box):
                 continue
             width = box[2] - box[0]
             if (score, width) > (best_score, best_width):
@@ -611,7 +675,7 @@ def _best_anchor_with_regions(
         image = images.get(page.page)
         for label in labels:
             for score, box, _end in find_anchors(page.tokens, label, bonus=_label_bonus):
-                if score < MIN_ANCHOR_SCORE:
+                if score < MIN_ANCHOR_SCORE or _names_another_person(page, box):
                     continue
                 rank = score
                 if image is not None:

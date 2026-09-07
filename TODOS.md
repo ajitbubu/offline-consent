@@ -171,23 +171,50 @@ invisible from the outside - high anchor score, clean characters, wrong answer.
 Both genuinely filled forms now read the applicant's name correctly:
 `AJIT KUMAR SAHU` at 0.93 and `Ajit Kumar Sahu` at 0.95, plus the date at 0.96.
 
+**The wrong-PERSON bug is fixed, and it was the last logic-level misread.**
+Extraction anchored on "Beneficiary's Name" on SMBC's A2 form at full score.
+Putting the beneficiary's name into a consent artifact is the same harm as the
+page-wide scan returning the applicant's Aadhaar as their phone - right shape,
+wrong person - and worse than reading nothing, because nothing is visibly empty
+on the review screen and a plausible name is not.
+
+An anchor is now rejected outright when the label it sits in names somebody
+else. The qualifier can be on either side ("Beneficiary's Name" puts it before,
+"Name of Guarantor" after), so both are read - the part after is the label tail
+`_skip_label_tail` already identifies, so it is asked rather than re-derived.
+The vocabulary is `harvest_labels.py`'s, narrowed to other PEOPLE: that file
+also excludes "branch" and "city", which are not the applicant but are not a
+person either and have no business rejecting an anchor. "Remitter" is
+deliberately absent - SMBC prints "Name of the Applicant (remitter)", where the
+remitter IS the applicant.
+
+Also fixed alongside it: OCR drops the opening parenthesis, so
+"Name of the Applicant (remitter)" came back as the bare token "remitter)" and
+the printed-instruction guard missed it. A closing bracket with no opener now
+counts as printed furniture.
+
+    accuracy held at 59.3%, and the ONLY remaining wrong value in the whole
+    corpus is `rajesh.v@example.org` read as `rajepsh.v@example.org`
+    - a character error, not a logic error.
+
+Blank-form coverage went 79.0% -> 78.1% doing this, and that drop is the fix
+working: those were anchors on other people's fields. Sampling the rejections
+shows what is being turned away - "Name of Father", "Mother's Maiden Name",
+"(Father's name is mandatory if PAN is not provided)" - which Indian KYC forms
+carry on nearly every page. Coverage counts labels found; correctness sometimes
+requires finding fewer.
+
 **Still open, in priority order.**
 
-1. *The extractor can pick the wrong PERSON.* On SMBC's A2 form it anchors on
-   "Beneficiary's Name" and returns "As per Application Form". Reading the
-   beneficiary as the data principal is the same class of harm as reading the
-   Aadhaar as the phone. `harvest_labels._NOT_THE_APPLICANT` already encodes the
-   vocabulary (guarantor, nominee, witness, father, spouse); the app's anchor
-   list does not use it. This is the next change and it is well evidenced.
-2. *Comb READING.* Detection works; extracting a value from the cells does not,
+1. *Comb READING.* Detection works; extracting a value from the cells does not,
    and it needs per-cell single-character OCR that the engine seam does not
    expose - it takes a page and returns words. Local tesseract turned a
    handwritten "ajitbubu" into "i1tbubu" at full word size, so it is unlikely to
    read single cells either. This is the strongest argument in the corpus for
    the cloud engine in section 4.
-3. *OCR character quality.* `rajesh.v@example.org` came back
+2. *OCR character quality.* `rajesh.v@example.org` came back
    `rajepsh.v@example.org` - located perfectly, read imperfectly. Also section 4.
-4. *40 of 67 planted values are `no-ocr`* - tesseract cannot resolve 8pt text at
+3. *40 of 67 planted values are `no-ocr`* - tesseract cannot resolve 8pt text at
    200 DPI in a narrow table cell. That caps how much this harness can measure,
    and it is the same limit real scans will hit.
 

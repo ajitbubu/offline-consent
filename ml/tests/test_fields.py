@@ -336,3 +336,49 @@ def test_reads_a_value_written_below_the_printed_labels_baseline():
     assert result.value is not None
     assert "kumar" in result.value.lower()
     assert "mobile" not in result.value.lower()
+
+
+def test_never_returns_another_persons_name_as_the_applicants():
+    """A consent record names the data principal, not the guarantor.
+
+    Found on SMBC's A2 form, where extraction anchored on "Beneficiary's Name"
+    at full score. Putting the beneficiary's name into a consent artifact is
+    the same harm as the page-wide scan that returned the applicant's Aadhaar
+    as their phone number - the right shape, the wrong person - and it is worse
+    than reading nothing, because nothing is visibly empty on the review screen.
+    """
+    image = Image.new("L", (1400, 320), 255)
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 60), "Beneficiary's Name:", font=_font(34), fill=0)
+    draw.text((520, 60), "Rakesh Gupta", font=_font(34), fill=0)
+    draw.text((60, 180), "Full name:", font=_font(34), fill=0)
+    draw.text((520, 180), "Priya Sharma", font=_font(34), fill=0)
+
+    result = _by_key(fields.read(_pages(image), [NAME]), "fullName")
+
+    assert result.value is not None
+    assert "priya" in result.value.lower()
+    assert "rakesh" not in result.value.lower()
+
+
+def test_a_form_that_only_names_a_guarantor_reads_null():
+    """With no applicant label on the paper, the answer is nothing at all."""
+    image = Image.new("L", (1400, 200), 255)
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 60), "Name of Guarantor:", font=_font(34), fill=0)
+    draw.text((520, 60), "Rakesh Gupta", font=_font(34), fill=0)
+
+    result = _by_key(fields.read(_pages(image), [NAME]), "fullName")
+    assert result.value is None
+
+
+def test_a_bracketed_qualifier_is_not_a_value_even_with_the_opener_lost():
+    """OCR drops the opening paren, so the closer is the only evidence left.
+
+    SMBC prints "Name of the Applicant (remitter)". Tesseract read the tail as
+    the bare token "remitter)", which starts with no bracket - so the guard that
+    catches printed instructions missed it and "remitter)" came back as a name.
+    """
+    assert fields._looks_like_instruction("(remitter)")
+    assert fields._looks_like_instruction("remitter)")
+    assert not fields._looks_like_instruction("Sharma")

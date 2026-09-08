@@ -82,7 +82,7 @@ flowchart TB
   subgraph staff["Staff · aud offline-consent-staff · 8 h · httpOnly cookie · Origin checked"]
     S["Operator · DPO · Admin<br/>staff console, kiosk"] --> SA["/api/staff/*<br/>requireStaff(role)"]
     SA --> SL["intake.ts — commitDraft()<br/>the ONLY writer of consent_artifact"]
-    ML["ml/ service · OCR + layout<br/>PLANNED"] -.-> SL
+    ML["ml/ service · OCR + tick-boxes<br/>layout model: NOT BUILT"] -.-> SL
   end
   PL --> DB
   SL --> DB
@@ -130,8 +130,8 @@ drifted would be the one nobody tested.
 flowchart LR
   M[Manual entry] --> D
   S["Scanned form<br/>evidence attached"] --> D
-  B["Bulk CSV<br/>PLANNED"] --> D
-  K["Kiosk + signature<br/>PLANNED"] --> D
+  B["Bulk CSV"] --> D
+  K["Kiosk + signature"] --> D
   D["intake_draft<br/>one payload shape<br/>+ scan, OCR tokens, match candidate"] --> V["Validate<br/>errors block commit, warnings don't<br/>undialable phone IS an error"]
   V --> H["Human review<br/>scan beside the fields<br/>NO AUTO-COMMIT"]
   H -. rejected, with a reason .-> X[rejected]
@@ -195,13 +195,13 @@ permanently blocks a statutory right.
 | FR-8 | A Data Principal reaches their record with a one-time code to a contact point on their form. No account, no password. | Built |
 | FR-9 | Where several people share a contact point, the portal offers a masked choice rather than assuming or disclosing. | Built |
 | FR-10 | Withdrawal is per purpose and idempotent. Re-withdrawing changes nothing but is still recorded — a repeat may be evidence the first was not honoured downstream. | Built |
-| FR-11 | Someone whose contact details were transcribed wrongly can reach a human without the portal disclosing whether they are in the register. | Built |
-| FR-12 | Forms with no notice at collection accumulate a worked s.5(2) queue with delivery recorded per person. (Counted on the dashboard; queue outstanding.) | Partial |
-| FR-13 | A withdrawal raises a cessation task per registered downstream system, with a stored due date and a legal-hold state for the statutory carve-out. | Planned |
-| FR-14 | A DPO can search the register and see, for one person, every artifact, current consent, and the full audit trail. | Planned |
-| FR-15 | A CSV of already-digitised records imports with column mapping and a per-row validation report; each row commits in its own transaction. | Planned |
-| FR-16 | A tablet at the counter captures a drawn signature and reaches the same review-and-commit step, resetting after 90 s idle. | Planned |
-| FR-17 | Scanned fields are extracted by a trained model, not an LLM: OCR tokens + layout classification for text, ink-density detection for tick-boxes. Every field remains human-confirmed. Labels derive from committed drafts, so the review screen doubles as the annotation tool. | Planned |
+| FR-11 | Someone whose contact details were transcribed wrongly can reach a human without the portal disclosing whether they are in the register, and that request lands in a worked queue rather than a table nobody opens. | Built |
+| FR-12 | Forms with no notice at collection accumulate a worked s.5(2) queue with delivery recorded per person. | Built |
+| FR-13 | A withdrawal raises a cessation task per registered downstream system, with a stored due date and a legal-hold state for the statutory carve-out. | Built |
+| FR-14 | A DPO can search the register and see, for one person, every artifact, current consent, and the full audit trail. | Built |
+| FR-15 | A CSV of already-digitised records imports with column mapping and a per-row validation report; each row commits in its own transaction. | Built |
+| FR-16 | A tablet at the counter captures a drawn signature and reaches the same review-and-commit step, resetting after 90 s idle. | Built |
+| FR-17 | Scanned fields are extracted by a trained model, not an LLM: OCR tokens + layout classification for text, ink-density detection for tick-boxes. Every field remains human-confirmed. Labels derive from committed drafts, so the review screen doubles as the annotation tool. | Partial — OCR, tick-box detection and the training export are built; the layout model needs 50–100 reviewed scans and the corpus is at zero |
 
 ## 9. Security, privacy and non-functional requirements
 
@@ -231,7 +231,7 @@ permanently blocks a statutory right.
 | s.6(1) | Consent free, specific, informed, unambiguous, clear action | Per-purpose artifact items carrying the verbatim printed label |
 | s.6(4) | Withdrawal as easy as giving | Public portal, one-time code, no account — the whole of Flow B |
 | s.6(5) | Withdrawal does not affect prior lawful processing | Stated plainly on the confirmation screen; artifacts never altered |
-| s.6(6) | Cease processing, and cause processors to cease | Cessation tasks per downstream system with stored due dates *(planned)* |
+| s.6(6) | Cease processing, and cause processors to cease | Cessation tasks per downstream system with stored due dates, a legal-hold state for the statutory carve-out, and the person who asserted it |
 | s.8(7) | Erase on withdrawal unless retention required by law | Retention of the scan as proof of lawful collection — a recorded policy decision requiring DPO sign-off |
 | s.12 | Access, correction, erasure | Access via the portal; correction and erasure are separate requests, deliberately not conflated with withdrawal |
 | s.8(4) | Reasonable security safeguards | SEC-1 to SEC-9 |
@@ -277,10 +277,22 @@ The product does its whole job today: paper in, withdrawal out.
 | 2 | Staff authentication, roles, console shell | Shipped |
 | 3 | Evidence storage, manual and scanned intake, review, commit | Shipped |
 | 4 | Public withdrawal portal, one-time codes, notice pages | Shipped |
-| 5 | Bulk CSV import with column mapping and per-row report | Next |
-| 6 | Kiosk capture with drawn signature | Planned |
-| 7 | DPO surfaces: register search, notice queue, cessation, merge | Planned |
-| 8 | Extraction service: OCR, tick-box detection, layout model | Planned |
+| 5 | Bulk CSV import with column mapping and per-row report | Shipped |
+| 6 | Kiosk capture with drawn signature | Shipped |
+| 7 | DPO surfaces: register search, notice queue, cessation, merge | Shipped |
+| 8 | Extraction service: OCR, tick-box detection, layout model | OCR and tick-boxes shipped; layout model blocked on corpus |
+
+**7 preceded 5, and that was the right call.** Bulk import pushes thousands of
+forms through an exact-name matcher, with a duplicate gate built for one-at-a-time
+human review (`commitDraft` throws `possible_duplicate` per draft). Had it landed
+first, every duplicate it created would have been a consent record the person
+could not withdraw and nobody could see. Phase 7 shipped first, so register
+search, duplicate detection and merge were already there to receive them.
+
+**What is left.** The layout model (blocked on a corpus that has to accumulate
+from real reviews) and a set-based `commitDraft`, which is deliberately deferred
+until bulk import is run at volume — the rules it would compress are the most
+safety-critical logic in the app. See `TODOS.md`.
 
 ### Open decisions — the organisation's to make, not engineering's
 

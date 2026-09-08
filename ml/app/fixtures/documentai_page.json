@@ -1,0 +1,74 @@
+{
+  "_comment": "PLACEHOLDER, NOT A CAPTURED RESPONSE. Shaped by hand from the documented Document AI Document schema so the adapter and the whole pipeline can be exercised offline. It cannot prove the polygon-to-pixel conversion is right, because it was written by the same reasoning as the adapter. Replace it with one real captured response before trusting any accuracy number: that is the single test the mock cannot stand in for.",
+  "text": "Full name: PRIYA SHARMA Mobile No 9876543210 Date 2026-04-11",
+  "pages": [
+    {
+      "tokens": [
+        {
+          "layout": {
+            "confidence": 0.99,
+            "textAnchor": { "textSegments": [{ "startIndex": 0, "endIndex": 4 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.08, "y": 0.10 }, { "x": 0.16, "y": 0.10 },
+              { "x": 0.16, "y": 0.13 }, { "x": 0.08, "y": 0.13 }
+            ] }
+          }
+        },
+        {
+          "layout": {
+            "confidence": 0.98,
+            "textAnchor": { "textSegments": [{ "startIndex": 5, "endIndex": 10 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.17, "y": 0.10 }, { "x": 0.24, "y": 0.10 },
+              { "x": 0.24, "y": 0.13 }, { "x": 0.17, "y": 0.13 }
+            ] }
+          }
+        },
+        {
+          "_case": "handwritten value, ROTATED: vertices do NOT start top-left. Reading vertices[0] and vertices[2] as opposite corners would invert this box; min/max over all four is what makes it survive.",
+          "layout": {
+            "confidence": 0.91,
+            "textAnchor": { "textSegments": [{ "startIndex": 11, "endIndex": 16 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.42, "y": 0.14 }, { "x": 0.28, "y": 0.13 },
+              { "x": 0.28, "y": 0.09 }, { "x": 0.42, "y": 0.10 }
+            ] }
+          }
+        },
+        {
+          "_case": "second half of the handwritten name",
+          "layout": {
+            "confidence": 0.88,
+            "textAnchor": { "textSegments": [{ "startIndex": 17, "endIndex": 23 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.44, "y": 0.10 }, { "x": 0.58, "y": 0.10 },
+              { "x": 0.58, "y": 0.14 }, { "x": 0.44, "y": 0.14 }
+            ] }
+          }
+        },
+        {
+          "_case": "degenerate: sub-pixel polygon. Must be dropped, not passed on as a zero-area box.",
+          "layout": {
+            "confidence": 0.30,
+            "textAnchor": { "textSegments": [{ "startIndex": 24, "endIndex": 30 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.60, "y": 0.20 }, { "x": 0.6001, "y": 0.20 },
+              { "x": 0.6001, "y": 0.2001 }, { "x": 0.60, "y": 0.2001 }
+            ] }
+          }
+        },
+        {
+          "_case": "whitespace-only text. Must be dropped.",
+          "layout": {
+            "confidence": 0.95,
+            "textAnchor": { "textSegments": [{ "startIndex": 4, "endIndex": 5 }] },
+            "boundingPoly": { "normalizedVertices": [
+              { "x": 0.70, "y": 0.30 }, { "x": 0.74, "y": 0.30 },
+              { "x": 0.74, "y": 0.33 }, { "x": 0.70, "y": 0.33 }
+            ] }
+          }
+        }
+      ]
+    }
+  ]
+}

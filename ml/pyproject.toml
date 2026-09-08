@@ -1,0 +1,28 @@
+[project]
+name = "offline-consent-ml"
+version = "0.1.0"
+description = "OCR and tick-box extraction for scanned paper consent forms."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.20",
+    "pydantic>=2.9",
+    "pillow>=11.0",
+    "numpy>=2.0",
+    "pytesseract>=0.3.13",
+    "pymupdf>=1.24",
+    # Verified 2026-09: current major is 3.x (3.8-3.15 documented). Imported
+    # lazily inside the engine so DOCUMENT_AI_MOCK_MODE works without a GCP
+    # account and the whole suite runs offline.
+    "google-cloud-documentai>=3.8,<4",
+    # The second cloud engine, so the choice between them is measured on real
+    # forms rather than argued. Also lazily imported.
+    "google-cloud-vision>=3.7,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "httpx>=0.28"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

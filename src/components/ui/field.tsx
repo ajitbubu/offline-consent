@@ -1,7 +1,18 @@
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 
+/**
+ * text-base, not text-sm, and min-h-11.
+ *
+ * iOS zooms the whole page when a focused input's font-size is under 16px, so a
+ * 14px control means every tap on a field jerks the layout and the person has
+ * to pinch back out. That is worst on the withdrawal portal, which is mostly
+ * used on a phone by someone exercising a statutory right - the one flow where
+ * friction is the thing the Act is trying to remove.
+ *
+ * min-h-11 is 44px, the floor for a touch target. These controls measured 38px.
+ */
 const CONTROL =
-  "w-full rounded-md border bg-panel px-3 py-2 text-sm text-ink placeholder:text-muted disabled:bg-canvas";
+  "w-full min-h-11 rounded-md border bg-panel px-3 py-2 text-base text-ink placeholder:text-muted disabled:bg-canvas";
 
 /**
  * A labelled control. The error is wired to the input with aria-describedby and

@@ -228,6 +228,327 @@ describe("commitDraft", () => {
       expect(result.noticeOwed).toBe(false);
     });
   });
+
+  it("refuses a form that answers the same purpose twice", async () => {
+    // REGRESSION (R3). consent_artifact_item is written with ON CONFLICT DO
+    // NOTHING (first wins) and the projection loop overwrites (last wins), so a
+    // duplicated purpose left the immutable evidence saying "declined" and the
+    // record enforcement reads saying "active" - about the same tick-box.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const purpose = fx.purposeIds[0];
+      const payload = {
+        principal: { fullName: "Dup Person", phone: "9876500042", phoneE164: null, email: null },
+        noticeId: fx.noticeId,
+        noticeAtCollection: "printed_on_form",
+        collectedOn: "2019-03-04",
+        collectedOnPrecision: "day",
+        collectionLocation: null,
+        subjectDeclaration: null,
+        items: [
+          { purposeId: purpose, granted: false, verbatimLabel: fx.labels[0] },
+          { purposeId: purpose, granted: true, verbatimLabel: fx.labels[0] },
+        ],
+      };
+      const { rows } = await client.query<{ id: string }>(
+        "INSERT INTO intake_draft (source, payload, created_by) VALUES ('manual', $1, $2) RETURNING id",
+        [JSON.stringify(payload), fx.staffId],
+      );
+
+      await expect(
+        commitDraft({ draftId: rows[0].id, staffId: fx.staffId }, client),
+      ).rejects.toMatchObject({ code: "validation_failed" });
+
+      const artifacts = await client.query("SELECT 1 FROM consent_artifact WHERE intake_draft_id = $1", [rows[0].id]);
+      expect(artifacts.rowCount).toBe(0);
+    });
+  });
+
+  it("does not let a form dated 4 March override a withdrawal made on 5 March IST", async () => {
+    // REGRESSION (R4). withdrawn_at is a TIMESTAMPTZ and was rendered with
+    // .toISOString(), i.e. in UTC. 01:00 on 5 March in Asia/Kolkata is 19:30 on
+    // 4 March in UTC, so the withdrawal compared as same-day against a form
+    // dated 4 March, lost the strict `>`, and the consent came back on.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await withdrawPurposes(
+        {
+          principalId: first.dataPrincipalId,
+          purposeIds: [fx.purposeIds[0]],
+          channel: "portal",
+          actorType: "data_principal",
+          actorId: first.dataPrincipalId,
+        },
+        client,
+      );
+      await client.query(
+        `UPDATE consent_record SET withdrawn_at = '2024-03-05 01:00:00+05:30'
+          WHERE data_principal_id = $1 AND purpose_id = $2`,
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+
+      // A DIFFERENT form carrying the same date. Byte-identical resubmission is a
+      // double import and is refused by the payload_hash guard, so the rule under
+      // test here needs two genuinely distinct forms.
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, {
+            collectedOn: "2024-03-04",
+            granted: [true, false, true],
+          }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+
+      expect(second.withheldPurposeIds).toContain(fx.purposeIds[0]);
+      const { rows } = await client.query<{ status: string }>(
+        "SELECT status FROM consent_record WHERE data_principal_id = $1 AND purpose_id = $2",
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+      expect(rows[0].status).toBe("withdrawn");
+    });
+  });
+
+  it("withholds when the form and the withdrawal fall on the same day", async () => {
+    // A tie cannot be ordered from day-precision data, so it resolves toward
+    // the withdrawal - the same direction auth.ts:revokedBy takes.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2024-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await withdrawPurposes(
+        {
+          principalId: first.dataPrincipalId,
+          purposeIds: [fx.purposeIds[0]],
+          channel: "portal",
+          actorType: "data_principal",
+          actorId: first.dataPrincipalId,
+        },
+        client,
+      );
+      await client.query(
+        `UPDATE consent_record SET withdrawn_at = '2024-03-04 14:00:00+05:30'
+          WHERE data_principal_id = $1 AND purpose_id = $2`,
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, {
+            collectedOn: "2024-03-04",
+            granted: [true, false, true],
+          }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+      expect(second.withheldPurposeIds).toContain(fx.purposeIds[0]);
+    });
+  });
+
+  it("does not let an undated form overwrite a dated record", async () => {
+    // REGRESSION (R6). The supersession guard required BOTH dates to be
+    // non-null before it would skip, so an undated form fell straight through
+    // to the UPDATE and replaced a dated consent - nulling consent_given_on on
+    // the way. An undated form cannot be shown to be later than anything.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2023-01-01" }), staffId: fx.staffId },
+        client,
+      );
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { collectedOn: null, granted: [false, false, false] }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+      expect(second.recordsWritten).toBe(0);
+
+      const { rows } = await client.query<{ status: string; consent_given_on: string | null }>(
+        "SELECT status, consent_given_on FROM consent_record WHERE data_principal_id = $1 AND purpose_id = $2",
+        [first.dataPrincipalId, fx.purposeIds[0]],
+      );
+      expect(rows[0].status).toBe("active");
+      expect(rows[0].consent_given_on).toBe("2023-01-01");
+    });
+  });
+
+  it("learns a contact point a later form supplies", async () => {
+    // matchPrincipal resolves on phone OR email, so this person was found by
+    // their phone number and the email on the second form used to be dropped.
+    // A contact point we were given and did not store is a withdrawal route
+    // that person will never have.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { phone: "9876500001", email: null }), staffId: fx.staffId },
+        client,
+      );
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, {
+            phone: "9876500001",
+            email: "person@example.org",
+            collectedOn: "2020-05-05",
+          }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+      expect(second.dataPrincipalId).toBe(first.dataPrincipalId);
+
+      const { rows } = await client.query<{ phone_e164: string; email: string | null }>(
+        "SELECT phone_e164, email FROM data_principal WHERE id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(rows[0].phone_e164).toBe("+919876500001");
+      expect(rows[0].email).toBe("person@example.org");
+
+      const { rows: audit } = await client.query<{ n: string }>(
+        `SELECT count(*) AS n FROM audit_log
+          WHERE data_principal_id = $1 AND new_state->>'change' = 'contact_point_learned'`,
+        [first.dataPrincipalId],
+      );
+      expect(Number(audit[0].n)).toBe(1);
+    });
+  });
+
+  it("covers the printed wording in the payload hash", async () => {
+    // The verbatim label is what the person actually ticked - the most legally
+    // significant field on the artifact - and it was outside the integrity
+    // hash, so two artifacts recording different printed wording hashed the same.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+
+      const draft = async (label: string) => {
+        const payload = {
+          principal: { fullName: "Hash Person", phone: "9876500077", phoneE164: null, email: null },
+          noticeId: fx.noticeId,
+          noticeAtCollection: "printed_on_form",
+          collectedOn: "2019-03-04",
+          collectedOnPrecision: "day",
+          collectionLocation: null,
+          subjectDeclaration: null,
+          items: [{ purposeId: fx.purposeIds[0], granted: true, verbatimLabel: label }],
+        };
+        const { rows } = await client.query<{ id: string }>(
+          "INSERT INTO intake_draft (source, payload, created_by) VALUES ('manual', $1, $2) RETURNING id",
+          [JSON.stringify(payload), fx.staffId],
+        );
+        return rows[0].id;
+      };
+
+      const a = await commitDraft({ draftId: await draft("I agree to marketing"), staffId: fx.staffId }, client);
+      const b = await commitDraft({ draftId: await draft("I agree to everything"), staffId: fx.staffId }, client);
+
+      const { rows } = await client.query<{ payload_hash: string }>(
+        "SELECT payload_hash FROM consent_artifact WHERE id = ANY($1::uuid[])",
+        [[a.artifactId, b.artifactId]],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].payload_hash).not.toBe(rows[1].payload_hash);
+    });
+  });
+
+  it("attaches a form to the survivor when the chosen person has been merged", async () => {
+    // The confirmPrincipalId path checked only that the row existed, so an
+    // artifact could be attached to an absorbed identity - which the portal
+    // resolves past, making those consents unwithdrawable.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { phone: "9876500011" }), staffId: fx.staffId },
+        client,
+      );
+      const { rows: survivor } = await client.query<{ id: string }>(
+        "INSERT INTO data_principal (full_name, phone_e164) VALUES ($1, $2) RETURNING id",
+        ["Survivor Person", "+919876500012"],
+      );
+      await client.query("UPDATE data_principal SET merged_into_id = $2 WHERE id = $1", [
+        first.dataPrincipalId,
+        survivor[0].id,
+      ]);
+
+      const second = await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { phone: "9876500011", collectedOn: "2021-06-06" }),
+          staffId: fx.staffId,
+          confirmPrincipalId: first.dataPrincipalId,
+        },
+        client,
+      );
+
+      expect(second.dataPrincipalId).toBe(survivor[0].id);
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_record WHERE data_principal_id = $1",
+        [survivor[0].id],
+      );
+      expect(Number(rows[0].n)).toBeGreaterThan(0);
+    });
+  });
+
+  it("refuses a form already recorded byte for byte against this person", async () => {
+    // payload_hash existed from migration 005 and nothing read it, so importing
+    // the same CSV twice gave one person two identical artifacts. Artifacts are
+    // append-only, so a duplicate cannot be tidied away - it sits in the evidence
+    // record forever and a DPO cannot tell one form counted twice from two forms.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+        client,
+      );
+
+      await expect(
+        commitDraft(
+          { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+          client,
+        ),
+      ).rejects.toMatchObject({ code: "already_recorded" });
+
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_artifact WHERE data_principal_id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(Number(rows[0].n)).toBe(1);
+    });
+  });
+
+  it("still accepts a genuinely different form for the same person", async () => {
+    // The guard is on identical content, not on the person. A later form with
+    // different answers is exactly how a correction is recorded.
+    await withRollback(async (client) => {
+      const fx = await seedFixture(client);
+      const first = await commitDraft(
+        { draftId: await insertDraft(client, fx, { collectedOn: "2019-03-04" }), staffId: fx.staffId },
+        client,
+      );
+      await commitDraft(
+        {
+          draftId: await insertDraft(client, fx, { collectedOn: "2021-08-08", granted: [false, true, true] }),
+          staffId: fx.staffId,
+        },
+        client,
+      );
+
+      const { rows } = await client.query<{ n: string }>(
+        "SELECT count(*) AS n FROM consent_artifact WHERE data_principal_id = $1",
+        [first.dataPrincipalId],
+      );
+      expect(Number(rows[0].n)).toBe(2);
+    });
+  });
 });
 
 describe("the artifact is immutable", () => {

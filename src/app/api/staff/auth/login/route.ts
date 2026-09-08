@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { query } from "@/lib/db";
-import { hashPassword, setStaffCookie, signStaffToken, verifyPassword } from "@/lib/auth";
+import {
+  assertSameOrigin,
+  hashPassword,
+  setStaffCookie,
+  signStaffToken,
+  verifyPassword,
+} from "@/lib/auth";
 import { clientIp, userAgent, writeAudit } from "@/lib/audit";
 import { errorResponse, json } from "@/lib/http";
 import { isStaffRole } from "@/lib/consent";
@@ -33,6 +39,10 @@ async function tooManyFailures(email: string, ip: string | null): Promise<boolea
 
 export async function POST(request: Request) {
   try {
+    // auth.ts says every mutating staff route checks Origin, and this one did
+    // not. Login CSRF is the quiet one: an attacker signs a DPO into an account
+    // they control, and everything that person then types goes into it.
+    assertSameOrigin(request);
     const { email, password } = schema.parse(await request.json());
     const ip = clientIp(request);
     const ua = userAgent(request);

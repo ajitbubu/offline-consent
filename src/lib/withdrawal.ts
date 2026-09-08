@@ -9,11 +9,19 @@
  *    consent was validly obtained in the first place.
  *  - It does not fail when the consent is already withdrawn. A repeated request
  *    is a person insisting, not an error.
+ *  - It does not stop at our own database. Each purpose actually withdrawn
+ *    raises a cessation task per active downstream system, so s.6(6) is a worked
+ *    queue rather than an intention.
+ *  - It does not report success it did not achieve. Every branch returns an
+ *    outcome and writes an audit entry, including the one where there is no
+ *    record to withdraw, and the portal renders what came back rather than
+ *    assuming a 200 meant something changed.
  *  - It does not let a withdrawal be undone here. Re-granting consent requires a
  *    new artifact, which means new paper.
  */
 import "server-only";
 import { writeAudit } from "@/lib/audit";
+import { raiseCessationTasks } from "@/lib/cessation";
 import type { Executor } from "@/lib/db";
 import type { WithdrawalChannel } from "@/lib/consent";
 
@@ -54,6 +62,25 @@ export async function withdrawPurposes(
 
     const record = rows[0];
     if (!record) {
+      // No record for this (person, purpose). Audited like every other branch:
+      // a person exercising s.6(4) against something we cannot find is exactly
+      // the case where the evidence that they ASKED matters most, and it is
+      // also the signal that they have a second identity in the register whose
+      // consents this token cannot reach.
+      await writeAudit(
+        {
+          action: "consent_withdrawn",
+          actorType: input.actorType,
+          actorId: input.actorId,
+          dataPrincipalId: input.principalId,
+          newState: { purposeId, channel: input.channel, outcome: "not_found" },
+          reason: input.reason ?? null,
+          complianceTags: ["dpdp_s6_4"],
+          ipAddress: input.ipAddress ?? null,
+          userAgent: input.userAgent ?? null,
+        },
+        client,
+      );
       outcomes.push({ purposeId, status: "not_found", changed: false, withdrawnOn: null });
       continue;
     }
@@ -126,6 +153,14 @@ export async function withdrawPurposes(
       withdrawnOn: updated[0].withdrawn_at.toISOString(),
     });
   }
+
+  // s.6(6): stopping is not just changing our own row. Every active downstream
+  // system that holds this person's data gets a task, raised in the same
+  // transaction as the withdrawal - a withdrawal recorded without its
+  // obligations is exactly the gap this closes. Only purposes that actually
+  // changed raise one; a person insisting is not a second obligation.
+  const changed = outcomes.filter((o) => o.changed).map((o) => o.purposeId);
+  await raiseCessationTasks(input.principalId, changed, client);
 
   return outcomes;
 }

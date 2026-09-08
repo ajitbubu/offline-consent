@@ -28,7 +28,10 @@ export type AuditAction =
   | "staff_login_failed"
   | "principals_merged"
   | "notice_delivered"
-  | "cessation_completed";
+  | "cessation_completed"
+  | "lookup_request_filed"
+  | "lookup_request_resolved"
+  | "lookup_request_rejected";
 
 export type ComplianceTag =
   | "dpdp_s5_2"

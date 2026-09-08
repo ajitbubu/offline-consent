@@ -2,11 +2,21 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, ShieldCheck } from "lucide-react";
+import { Badge, type Tone } from "@/components/ui/badge";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { OtpInput } from "@/components/otp-input";
+import { normaliseEmail, normalisePhone } from "@/lib/phone";
 import { consentStatusLabels, type ConsentStatus } from "@/lib/consent";
+
+interface WithdrawOutcome {
+  purposeId: string;
+  status: "withdrawn" | "declined" | "not_found";
+  changed: boolean;
+  withdrawnOn: string | null;
+}
 
 interface Consent {
   purposeId: string;
@@ -21,6 +31,20 @@ interface Consent {
 }
 
 type Stage = "contact" | "code" | "choose" | "consents" | "done";
+
+/**
+ * Which consents are still running is the question this whole screen exists to
+ * answer, and it was previously answered in the same 12px grey as every other
+ * scrap of metadata on the card - so "Active" and "Withdrawn" were
+ * indistinguishable at a glance. Live consent is the state a person might want
+ * to act on, so it is the one that carries colour. Withdrawn and declined are
+ * both inert; the label tells them apart.
+ */
+const STATUS_TONE: Record<ConsentStatus, Tone> = {
+  active: "green",
+  withdrawn: "neutral",
+  declined: "neutral",
+};
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-IN", {
@@ -49,6 +73,7 @@ export function WithdrawClient() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showLookup, setShowLookup] = useState(false);
+  const [outcomes, setOutcomes] = useState<WithdrawOutcome[]>([]);
 
   async function loadConsents(bearer: string) {
     const response = await fetch("/api/portal/consents", {
@@ -66,6 +91,26 @@ export function WithdrawClient() {
   }
 
   async function requestCode() {
+    // Refuse a destination that could not receive a code no matter who it
+    // belonged to.
+    //
+    // The server answers identically whether or not a destination is in the
+    // register, which is the right call - but it meant a mistyped number went
+    // straight to "we have just sent you a code" and the person then waited for
+    // a code that was never sent, because normalisePhone had rejected it and no
+    // challenge was ever written. A nine-digit typo is the common case.
+    //
+    // Checking the SHAPE here leaks nothing: whether a string looks like a phone
+    // number or an email is independent of whether it is on the register, so the
+    // anti-enumeration property is untouched. Uses the same normalisers the
+    // server uses, so the two cannot disagree about what is reachable.
+    if (normalisePhone(destination) === null && normaliseEmail(destination) === null) {
+      setError(
+        "That does not look like a mobile number or an email address. Check it against the form you signed.",
+      );
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
@@ -147,6 +192,10 @@ export function WithdrawClient() {
         setError(body.error ?? "Could not record your withdrawal");
         return;
       }
+      // A 200 does not mean anything changed. Telling someone their consent is
+      // withdrawn when no record was touched is the worst failure this screen
+      // has, so the confirmation is built from what the server actually did.
+      setOutcomes(Array.isArray(body.outcomes) ? body.outcomes : []);
       setStage("done");
     } finally {
       setBusy(false);
@@ -156,23 +205,68 @@ export function WithdrawClient() {
   /* ---------------------------------------------------------------------- */
 
   if (stage === "done") {
+    const nameFor = (purposeId: string) =>
+      consents.find((c) => c.purposeId === purposeId)?.name ?? "That purpose";
+    const changed = outcomes.filter((o) => o.changed);
+    const alreadyWithdrawn = outcomes.filter((o) => !o.changed && o.status === "withdrawn");
+    const neverGiven = outcomes.filter((o) => o.status === "declined");
+    const missing = outcomes.filter((o) => o.status === "not_found");
+    const somethingHappened = changed.length > 0 || alreadyWithdrawn.length > 0;
+
     return (
       <div className="flex flex-col gap-4">
         <h1 className="flex items-center gap-2 text-xl font-semibold text-ink">
-          <CheckCircle2 size={22} className="text-green" aria-hidden />
-          Your withdrawal is recorded
+          {somethingHappened ? (
+            <CheckCircle2 size={22} className="text-green" aria-hidden />
+          ) : (
+            <AlertCircle size={22} className="text-muted" aria-hidden />
+          )}
+          {somethingHappened
+            ? "Your withdrawal is recorded"
+            : "We could not withdraw anything"}
         </h1>
-        <p className="text-ink">
-          We have stopped relying on your consent for what you selected, and we are
-          instructing the systems that hold your data to do the same.
-        </p>
+
+        {changed.length > 0 && (
+          <p className="text-ink">
+            We have stopped relying on your consent for{" "}
+            {changed.map((o) => nameFor(o.purposeId)).join(", ")}, and we are
+            instructing the systems that hold your data to do the same.
+          </p>
+        )}
+        {alreadyWithdrawn.length > 0 && (
+          <p className="text-ink">
+            {alreadyWithdrawn.map((o) => nameFor(o.purposeId)).join(", ")} had already
+            been withdrawn. We have recorded that you asked again.
+          </p>
+        )}
+        {neverGiven.length > 0 && (
+          <p className="text-ink">
+            {neverGiven.map((o) => nameFor(o.purposeId)).join(", ")} was never given, so
+            there was nothing to withdraw.
+          </p>
+        )}
+        {missing.length > 0 && (
+          // Not a success, and not silent. This usually means the register holds
+          // the person under a second identity that this contact point does not
+          // reach, which only a human can put right.
+          // role="alert". Somebody asked to withdraw consent and it did not
+          // happen. That is the single most consequential thing this flow can
+          // report, and until now a screen reader was told none of it.
+          <Callout tone="amber" live="alert">
+            We have no record of {missing.map((o) => nameFor(o.purposeId)).join(", ")} for
+            you, so nothing was withdrawn for it. Your request has been logged and someone
+            will look into it. Please contact us if you do not hear back.
+          </Callout>
+        )}
         {/* s.6(5) says withdrawal has no effect on processing already carried
             out. Saying so plainly is more honest than implying deletion. */}
-        <p className="rounded-md bg-canvas px-4 py-3 text-sm text-muted">
-          Withdrawing consent does not undo anything we did with your data before now,
-          and it is not the same as deleting your data. If you want your data erased,
-          that is a separate request — contact us and we will handle it.
-        </p>
+        <div hidden={!somethingHappened}>
+          <Callout tone="neutral">
+            Withdrawing consent does not undo anything we did with your data before now,
+            and it is not the same as deleting your data. If you want your data erased,
+            that is a separate request — contact us and we will handle it.
+          </Callout>
+        </div>
         <Link href="/" className="text-sm text-blue hover:underline">
           Back to the start
         </Link>
@@ -208,7 +302,7 @@ export function WithdrawClient() {
                       id={`c-${consent.purposeId}`}
                       type="checkbox"
                       checked={checked}
-                      className="mt-1 size-4 accent-[var(--navy)]"
+                      className="mt-0.5 size-5 accent-[var(--navy)]"
                       onChange={(e) =>
                         setSelected((prev) => {
                           const next = new Set(prev);
@@ -222,7 +316,9 @@ export function WithdrawClient() {
                   <div className="flex-1">
                     <label
                       htmlFor={withdrawable ? `c-${consent.purposeId}` : undefined}
-                      className="block text-sm font-medium text-ink"
+                      // Negative margin keeps the layout identical while giving
+                      // the label a taller hit area than its 20px text box.
+                      className={`block text-sm font-medium text-ink ${withdrawable ? "-my-2 cursor-pointer py-2" : ""}`}
                     >
                       {consent.name}
                     </label>
@@ -243,9 +339,9 @@ export function WithdrawClient() {
                       {consent.formLabel ? ` · ${consent.formLabel}` : ""}
                     </p>
                   </div>
-                  <span className="text-xs text-muted">
+                  <Badge tone={STATUS_TONE[consent.status]}>
                     {consentStatusLabels[consent.status]}
-                  </span>
+                  </Badge>
                 </div>
               </li>
             );
@@ -253,9 +349,9 @@ export function WithdrawClient() {
         </ul>
 
         {error && (
-          <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+          <Callout tone="red" live="alert">
             {error}
-          </p>
+          </Callout>
         )}
 
         {active.length === 0 ? (
@@ -298,9 +394,9 @@ export function WithdrawClient() {
           ))}
         </ul>
         {error && (
-          <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+          <Callout tone="red" live="alert">
             {error}
-          </p>
+          </Callout>
         )}
       </div>
     );
@@ -367,9 +463,9 @@ export function WithdrawClient() {
       </Field>
 
       {error && (
-        <p role="alert" className="rounded-md bg-red-soft px-3 py-2 text-sm text-red">
+        <Callout tone="red" live="alert">
           {error}
-        </p>
+        </Callout>
       )}
 
       <Button disabled={busy || destination.trim().length < 3} onClick={requestCode}>
@@ -407,12 +503,13 @@ function LookupRequest({ onDone }: { onDone: () => void }) {
   const [contactNote, setContactNote] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (sent) {
     return (
-      <p className="rounded-md bg-green-soft px-3 py-2 text-sm text-green">
+      <Callout tone="green" live="status">
         Thank you. Someone will get in touch to find your record.
-      </p>
+      </Callout>
     );
   }
 
@@ -437,17 +534,38 @@ function LookupRequest({ onDone }: { onDone: () => void }) {
           placeholder="A phone number or email that works, and anything you remember"
         />
       </Field>
+      {error && (
+        <Callout tone="red" live="alert">
+          {error}
+        </Callout>
+      )}
       <div className="flex gap-2">
         <Button
           disabled={busy || claimedName.trim().length < 2 || contactNote.trim().length < 5}
           onClick={async () => {
             setBusy(true);
+            setError(null);
             try {
-              await fetch("/api/portal/lookup-request", {
+              // The response is READ, not discarded. This call could already
+              // fail - a mistyped Origin, a 500 - and now it can also come back
+              // 429 with a message the route composed deliberately. Showing
+              // "Thank you. Someone will get in touch" over any of those is the
+              // precise failure this whole table exists to prevent: a person
+              // believing they reached a human when no row was written, on the
+              // last route they have to s.6(4).
+              const response = await fetch("/api/portal/lookup-request", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ claimedName, contactNote, formReference: null }),
               });
+              const body = await response.json().catch(() => ({}));
+              if (!response.ok) {
+                setError(
+                  body.error ??
+                    "We could not send that just now. Please try again in a moment.",
+                );
+                return;
+              }
               setSent(true);
             } finally {
               setBusy(false);

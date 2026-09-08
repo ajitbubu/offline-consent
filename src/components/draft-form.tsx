@@ -3,13 +3,57 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, FileWarning, Info, Upload } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import type { NoticeSummary, Purpose } from "@/lib/catalogue";
 import type { DraftPayload } from "@/lib/intake";
 import type { ValidationIssue } from "@/lib/consent";
-import { DATE_PRECISIONS, datePrecisionLabels, NOTICE_AT_COLLECTION, noticeAtCollectionLabels } from "@/lib/consent";
+import {
+  DATE_PRECISIONS,
+  datePrecisionLabels,
+  NOTICE_AT_COLLECTION,
+  noticeAtCollectionLabels,
+  PREFILL_MIN_CONFIDENCE,
+  type ExtractedField,
+  type Extraction,
+  type OcrTokens,
+  type TickBoxReading,
+} from "@/lib/consent";
+
+/**
+ * What the scan said about a field, shown under it.
+ *
+ * A pre-filled box with no provenance is the exact failure this codebase keeps
+ * warning about: reviewers stop checking things that are usually right. So
+ * every value that came off the scan says so, and every value the service read
+ * but did NOT fill in says that too - a low-confidence read is evidence the
+ * reviewer should look at the paper, not something to hide.
+ *
+ * Declared at module scope rather than inside the form: a component created
+ * during render is a new component type on every keystroke, and React would
+ * remount it each time.
+ */
+function ScanHint({ field }: { field: ExtractedField | undefined }) {
+  if (!field) return null;
+  if (field.value === null) {
+    return <span className="text-xs text-amber">Not found on the scan. Read it yourself.</span>;
+  }
+  if (field.confidence < PREFILL_MIN_CONFIDENCE) {
+    return (
+      <span className="text-xs text-amber">
+        Scan read &ldquo;{field.value}&rdquo; but is not sure. Not filled in — check the paper.
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs text-muted">
+      Read from the scan{field.method === "anchored" ? " beside its printed label" : ""}. Check it.
+    </span>
+  );
+}
 
 interface DuplicateCandidate {
   principalId: string;
@@ -55,6 +99,14 @@ export function DraftForm({
   const [banner, setBanner] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Extraction output, carried from upload through to draft creation so the
+  // pair (tokens, human-verified payload) lands on one row. That pair is the
+  // training set for text extraction, which is the reason to run OCR now rather
+  // than when the model exists: a scan reviewed without it is a label lost.
+  const [ocrTokens, setOcrTokens] = useState<OcrTokens | null>(null);
+  const [extraction, setExtraction] = useState<Extraction | null>(null);
+  const [extracting, setExtracting] = useState(false);
+
   const purposeById = useMemo(
     () => new Map(purposes.map((p) => [p.id, p])),
     [purposes],
@@ -75,6 +127,9 @@ export function DraftForm({
    */
   function selectNotice(noticeId: string) {
     const chosen = notices.find((n) => n.id === noticeId) ?? null;
+    // The tick-box labels are the anchor the service matches against, so the
+    // scan can only be read once the reviewer says which form version it is.
+    if (chosen && evidence) void runExtraction(evidence.id, chosen.id);
     setPayload((p) => {
       const previous = new Map(p.items.map((i) => [i.purposeId, i.granted]));
       return {
@@ -89,6 +144,111 @@ export function DraftForm({
           : p.items,
       };
     });
+  }
+
+  const readingFor = (purposeId: string): TickBoxReading | undefined =>
+    extraction?.tickboxes.find((t) => t.purposeId === purposeId);
+
+  const fieldFor = (key: ExtractedField["key"]) =>
+    extraction?.fields?.find((f) => f.key === key);
+
+  /**
+   * The scanned date as YYYY-MM-DD, or null.
+   *
+   * The scan gives free text ("4 March 2019") and the control is type="date",
+   * so an unparseable read must NOT pre-fill - it is shown as a hint instead
+   * and the reviewer types it. Refusing to guess here is the same rule the
+   * tick-boxes follow: a wrong pre-fill is worse than an empty field.
+   */
+  const scannedDate = (raw: string | null | undefined): string | null => {
+    if (!raw) return null;
+    const parsed = Date.parse(raw.replace(/[^\w\s\-/.]/g, " ").replace(/\s+/g, " ").trim());
+    if (Number.isNaN(parsed)) return null;
+    const d = new Date(parsed);
+    // A date in the future is a misread, not a paper date.
+    if (d.getTime() > Date.now()) return null;
+    return d.toISOString().slice(0, 10);
+  };
+
+  /**
+   * Runs the scan through the extraction service.
+   *
+   * Never blocks and never reports failure: if the service is unavailable the
+   * reviewer simply gets the manual entry form, which is this same screen.
+   * Tokens are banked whether or not a form version has been chosen, because
+   * the corpus does not depend on anyone having configured one yet.
+   */
+  async function runExtraction(evidenceId: string, noticeId: string | null) {
+    setExtracting(true);
+    try {
+      const response = await fetch("/api/staff/extract", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ evidenceId, noticeId }),
+      });
+      if (!response.ok) return;
+      const body = await response.json();
+      if (!body.available) return;
+
+      setOcrTokens(body.ocrTokens ?? null);
+      setExtraction(body.extraction ?? null);
+
+      const readings: TickBoxReading[] = body.extraction?.tickboxes ?? [];
+      if (readings.length === 0) return;
+
+      // Only confident readings pre-fill. A box the service could not locate
+      // (granted === null) is left exactly as it was: "not found" is not
+      // "not ticked", and a wrong pre-fill is worse than an empty one because
+      // reviewers stop checking things that are usually right.
+      // The handwritten fields, on the same terms as the tick-boxes: only a
+      // confident read, and NEVER over something a person already typed. The
+      // reviewer's own keystrokes outrank anything a model proposed, and a
+      // scan that lands after they have started typing must not undo it.
+      const fields: ExtractedField[] = body.extraction?.fields ?? [];
+      const confident = (key: ExtractedField["key"]): string | null => {
+        const f = fields.find((x) => x.key === key);
+        if (!f || f.value === null || f.confidence < PREFILL_MIN_CONFIDENCE) return null;
+        return f.value;
+      };
+
+      setPayload((p) => {
+        const name = confident("fullName");
+        const phone = confident("phone");
+        const email = confident("email");
+        const dated = scannedDate(confident("collectedOn"));
+        return {
+          ...p,
+          principal: {
+            ...p.principal,
+            fullName: p.principal.fullName.trim() === "" && name ? name : p.principal.fullName,
+            phone: p.principal.phone ? p.principal.phone : phone,
+            email: p.principal.email ? p.principal.email : email,
+          },
+          collectedOn: p.collectedOn ? p.collectedOn : dated,
+          collectedOnPrecision:
+            p.collectedOn === null && dated ? "day" : p.collectedOnPrecision,
+        };
+      });
+
+      setPayload((p) => ({
+        ...p,
+        items: p.items.map((item) => {
+          const reading = readings.find((r) => r.purposeId === item.purposeId);
+          if (
+            reading === undefined ||
+            reading.granted === null ||
+            reading.confidence < PREFILL_MIN_CONFIDENCE
+          ) {
+            return item;
+          }
+          return { ...item, granted: reading.granted };
+        }),
+      }));
+    } catch {
+      // Same degradation path as an unavailable service.
+    } finally {
+      setExtracting(false);
+    }
   }
 
   function toggleItem(purposeId: string, granted: boolean) {
@@ -112,6 +272,8 @@ export function DraftForm({
         return;
       }
       setEvidence({ id: json.id, filename: json.filename, contentType: json.contentType });
+      // Tokens now, whether or not a form version has been chosen yet.
+      void runExtraction(json.id, payload.noticeId);
     } finally {
       setBusy(false);
     }
@@ -133,6 +295,8 @@ export function DraftForm({
             source: evidence ? "scan" : "manual",
             payload,
             evidenceId: evidence?.id ?? null,
+            ocrTokens,
+            extraction,
           }),
         });
         const body = await created.json();
@@ -200,13 +364,9 @@ export function DraftForm({
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className="flex flex-col gap-6">
         {banner && (
-          <p
-            role="alert"
-            className="flex items-start gap-2 rounded-md bg-red-soft px-3 py-2 text-sm text-red"
-          >
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
+          <Callout tone="red" live="alert" icon={<AlertTriangle size={16} aria-hidden />}>
             {banner}
-          </p>
+          </Callout>
         )}
 
         {duplicates.length > 0 && (
@@ -242,7 +402,13 @@ export function DraftForm({
         <Panel title="The person" description="Exactly as written on the form.">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <Field label="Full name" htmlFor="fullName" error={errorFor("fullName")} required>
+              <Field
+                label="Full name"
+                htmlFor="fullName"
+                error={errorFor("fullName")}
+                hint={<ScanHint field={fieldFor("fullName")} />}
+                required
+              >
                 <Input
                   id="fullName"
                   value={payload.principal.fullName}
@@ -257,7 +423,13 @@ export function DraftForm({
               label="Mobile number"
               htmlFor="phone"
               error={errorFor("phone")}
-              hint="Type it as written. It must resolve to a dialable number."
+              hint={
+                fieldFor("phone") ? (
+                  <ScanHint field={fieldFor("phone")} />
+                ) : (
+                  "Type it as written. It must resolve to a dialable number."
+                )
+              }
             >
               <Input
                 id="phone"
@@ -272,7 +444,12 @@ export function DraftForm({
                 }
               />
             </Field>
-            <Field label="Email" htmlFor="email" error={errorFor("email")}>
+            <Field
+              label="Email"
+              htmlFor="email"
+              error={errorFor("email")}
+              hint={<ScanHint field={fieldFor("email")} />}
+            >
               <Input
                 id="email"
                 type="email"
@@ -305,7 +482,12 @@ export function DraftForm({
               </Field>
             </div>
 
-            <Field label="Date signed" htmlFor="collectedOn" error={errorFor("collectedOn")}>
+            <Field
+              label="Date signed"
+              htmlFor="collectedOn"
+              error={errorFor("collectedOn")}
+              hint={<ScanHint field={fieldFor("collectedOn")} />}
+            >
               <Input
                 id="collectedOn"
                 type="date"
@@ -375,6 +557,18 @@ export function DraftForm({
           title="What they agreed to"
           description="Tick exactly what the paper shows. A box you cannot read must be resolved from the scan, not guessed."
         >
+          {extracting && (
+            <p className="mb-3 text-xs text-muted">Reading the scan…</p>
+          )}
+          {!extracting && extraction && (
+            <div className="mb-3">
+              <Callout tone="neutral">
+                Read from the scan by {extraction.engine} {extraction.engineVersion}. Every
+                box below is a suggestion until you confirm it — what you leave here is what
+                gets committed, not what the model proposed.
+              </Callout>
+            </div>
+          )}
           {payload.items.length === 0 ? (
             <p className="text-sm text-muted">
               Choose the form version above to load its tick-boxes.
@@ -383,6 +577,10 @@ export function DraftForm({
             <ul className="flex flex-col divide-y divide-line">
               {payload.items.map((item) => {
                 const purpose = purposeById.get(item.purposeId);
+                const reading = readingFor(item.purposeId);
+                const uncertain =
+                  reading !== undefined &&
+                  (reading.granted === null || reading.confidence < PREFILL_MIN_CONFIDENCE);
                 return (
                   <li key={item.purposeId} className="flex items-start gap-3 py-3">
                     <input
@@ -397,10 +595,35 @@ export function DraftForm({
                       {purpose && (
                         <span className="block text-xs text-muted">{purpose.name}</span>
                       )}
+                      {reading && reading.granted === null && (
+                        // "Could not find the label" is not "the box is empty".
+                        // Saying so is the difference between the reviewer
+                        // checking this line and trusting a silent false.
+                        <span className="mt-1 block text-xs text-amber">
+                          Could not find this wording on the scan. Read it yourself.
+                        </span>
+                      )}
+                      {reading && reading.granted !== null && uncertain && (
+                        <span className="mt-1 block text-xs text-amber">
+                          Unsure — looks {reading.granted ? "ticked" : "empty"} (
+                          {Math.round(reading.confidence * 100)}%). Check the scan.
+                        </span>
+                      )}
+                      {reading && reading.granted !== null && !uncertain && (
+                        <span className="mt-1 block text-xs text-muted">
+                          From the scan, {Math.round(reading.confidence * 100)}% confident.
+                        </span>
+                      )}
                     </label>
-                    <span className="text-xs text-muted">
+                    {/*
+                      Same grey as the OCR-confidence note two lines above, so
+                      the reviewer confirming ticks against paper had the
+                      weakest state affordance in the app. Mirrors STATUS_TONE
+                      in the portal: the affirmative state carries the colour.
+                    */}
+                    <Badge tone={item.granted ? "green" : "neutral"}>
                       {item.granted ? "Agreed" : "Not agreed"}
-                    </span>
+                    </Badge>
                   </li>
                 );
               })}

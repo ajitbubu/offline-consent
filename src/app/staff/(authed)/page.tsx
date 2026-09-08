@@ -2,8 +2,12 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { query } from "@/lib/db";
 import { requireStaff } from "@/lib/auth";
+import { Callout } from "@/components/ui/callout";
 import { Panel } from "@/components/ui/panel";
 import { roleAtLeast } from "@/lib/consent";
+import { corpusStatus } from "@/lib/training";
+import { extractionConfigured } from "@/lib/extraction";
+import { countOpenLookupRequests } from "@/lib/lookup";
 
 export const metadata: Metadata = { title: "Overview" };
 
@@ -68,7 +72,12 @@ function Stat({
 
 export default async function StaffOverviewPage() {
   const staff = await requireStaff();
-  const counts = await loadCounts();
+  const extractionAvailable = extractionConfigured();
+  const [counts, corpus, lookups] = await Promise.all([
+    loadCounts(),
+    corpusStatus(),
+    countOpenLookupRequests(),
+  ]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -96,6 +105,7 @@ export default async function StaffOverviewPage() {
           label="Notices owed"
           value={counts.notices_owed}
           hint="s.5(2) — no notice at collection"
+          href={roleAtLeast(staff.role, "dpo") ? "/staff/notices" : undefined}
         />
       </dl>
 
@@ -127,13 +137,88 @@ export default async function StaffOverviewPage() {
               <span className="text-muted"> — artifacts, current consent, audit trail.</span>
             </li>
           )}
+          {/* Occasional jobs rather than daily navigation, so they live here
+              instead of taking a slot in the primary nav. */}
+          {roleAtLeast(staff.role, "dpo") && (
+            <li>
+              <Link href="/staff/import" className="font-medium text-blue hover:underline">
+                Import a spreadsheet
+              </Link>
+              <span className="text-muted">
+                {" "}
+                — a CSV of records already typed out of the filing cabinet.
+              </span>
+            </li>
+          )}
+          <li>
+            <Link href="/staff/kiosk" className="font-medium text-blue hover:underline">
+              Set up the counter tablet
+            </Link>
+            <span className="text-muted"> — capture a signature at the counter.</span>
+          </li>
         </ol>
+        {roleAtLeast(staff.role, "dpo") && (
+          <div className="mt-4">
+            {/* The count of lost pairs is HISTORY and never falls, so it must
+                not carry the instruction. Told together, "N pairs are gone, set
+                ML_SERVICE_URL" kept telling an operator to set a variable that
+                was already set, on every visit, forever - and an instruction
+                that is permanently wrong is how people learn to skip the line
+                that matters. The fact is stated once; the advice is shown only
+                while it is still true. */}
+            <Callout tone="neutral">
+              Extraction corpus: <strong className="text-ink">{corpus.pairs}</strong> of{" "}
+              {corpus.target} scans needed before a text model is worth training.{" "}
+              {corpus.ready && "Enough to try."}
+              {!corpus.ready && extractionAvailable
+                ? "Tokens are being banked on every scan from here."
+                : null}
+              {!corpus.ready && !extractionAvailable
+                ? "ML_SERVICE_URL is not set, so every scan reviewed now is a pair lost for good."
+                : null}
+              {corpus.missedPairs > 0 && (
+                <>
+                  {" "}
+                  {corpus.missedPairs} committed scan
+                  {corpus.missedPairs === 1 ? " carries" : "s carry"} no OCR tokens;{" "}
+                  {corpus.missedPairs === 1 ? "that pair is" : "those pairs are"} gone.
+                </>
+              )}
+            </Callout>
+          </div>
+        )}
+
+        {roleAtLeast(staff.role, "dpo") && lookups.open > 0 && (
+          <div className="mt-4">
+            {/* Not a stat tile. Everyone counted here has told us they cannot
+                reach their own record, so this is an exception to work rather
+                than a number to watch - and if their form was mistyped, this
+                queue is the only route they have left to s.6(4). */}
+            <Callout tone={lookups.stale > 0 ? "red" : "amber"}>
+              {lookups.open} {lookups.open === 1 ? "person" : "people"} could not find their
+              record and asked for help
+              {lookups.stale > 0
+                ? `, and ${lookups.stale} ${lookups.stale === 1 ? "has" : "have"} been waiting over a week`
+                : ""}
+              .{" "}
+              <Link href="/staff/lookup-requests" className="font-medium text-blue hover:underline">
+                Work the queue
+              </Link>
+            </Callout>
+          </div>
+        )}
+
         {counts.undated_forms !== "0" && (
-          <p className="mt-4 rounded-md bg-amber-soft px-3 py-2 text-sm text-amber">
-            {counts.undated_forms} artifact{counts.undated_forms === "1" ? " is" : "s are"} recorded
-            as undated. An undated consent is a weak consent, so the s.5(2) notice matters more for
-            these.
-          </p>
+          <div className="mt-4">
+            {/* No live region: this is standing advice, not something that just
+                happened. A page that announces its own boilerplate on every
+                visit teaches people to ignore the announcements that matter. */}
+            <Callout tone="amber">
+              {counts.undated_forms} artifact{counts.undated_forms === "1" ? " is" : "s are"}{" "}
+              recorded as undated. An undated consent is a weak consent, so the s.5(2) notice
+              matters more for these.
+            </Callout>
+          </div>
         )}
       </Panel>
     </div>

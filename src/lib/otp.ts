@@ -17,6 +17,16 @@
  *   no probing        - verification is looked up by opaque challenge id, never
  *                       by destination.
  *   no phone directory- destinations are stored only as a peppered hash.
+ *   one code, one use - every state change below is a single conditional
+ *                       statement, so N concurrent requests produce one winner.
+ *
+ * That last property is not incidental. These functions are called with the
+ * pool, not a client, so each statement is its own implicit transaction and a
+ * SELECT ... FOR UPDATE releases its lock the moment the statement ends. Any
+ * read-modify-write here would lose updates under concurrency, and the thing
+ * that would be lost is the brute-force counter on the portal's only
+ * credential. Do not reintroduce one: express the change as an UPDATE whose
+ * WHERE clause carries the precondition, and check rowCount.
  */
 import "server-only";
 import { createHash, randomInt, randomUUID } from "node:crypto";
@@ -91,30 +101,44 @@ export async function requestOtp(
   const destinationHash = hashDestination(parsed.value);
   const ipHash = hashIp(ip);
 
-  const { rows: limits } = await executor.query<{ by_destination: string; by_ip: string }>(
-    `SELECT
-       (SELECT count(*) FROM otp_challenge
-         WHERE destination_hash = $1 AND created_at > now() - interval '15 minutes')
-         AS by_destination,
-       (SELECT count(*) FROM otp_challenge
-         WHERE $2::text IS NOT NULL AND ip_hash = $2
-           AND created_at > now() - interval '1 hour')
-         AS by_ip`,
-    [destinationHash, ipHash],
-  );
-
-  if (
-    Number(limits[0].by_destination) >= SENDS_PER_DESTINATION_PER_15_MIN ||
-    Number(limits[0].by_ip) >= SENDS_PER_IP_PER_HOUR
-  ) {
-    return settleAfter(startedAt, { rateLimited: true as const });
+  // The per-IP limit is answered honestly, because how many codes THIS caller
+  // has asked for says nothing about whether any given destination is in the
+  // register. The per-destination limit is not, and cannot be - see below.
+  if (ipHash) {
+    const { rows } = await executor.query<{ n: string }>(
+      `SELECT count(*) AS n FROM otp_challenge
+        WHERE ip_hash = $1 AND created_at > now() - interval '1 hour'`,
+      [ipHash],
+    );
+    if (Number(rows[0].n) >= SENDS_PER_IP_PER_HOUR) {
+      return settleAfter(startedAt, { rateLimited: true as const });
+    }
   }
 
+  // Resolve every matching contact point through the merge chain.
+  //
+  // Filtering on `merged_into_id IS NULL` here would have meant that the moment a
+  // DPO merged a duplicate, the contact point sitting on the absorbed row stopped
+  // reaching anybody - the person's own phone number would silently stop working
+  // at the portal, which is s.6(4) failing for exactly the people the merge was
+  // meant to help. The contact point stays where the paper put it; the read
+  // follows the chain to whoever holds their consent now.
   const { rows: matches } = await executor.query<{ id: string }>(
-    `SELECT id FROM data_principal
-      WHERE merged_into_id IS NULL
-        AND (($1 = 'sms'   AND phone_e164 = $2)
-          OR ($1 = 'email' AND email      = $2))`,
+    `WITH RECURSIVE matched AS (
+       SELECT id, merged_into_id
+         FROM data_principal
+        WHERE ($1 = 'sms'   AND phone_e164 = $2)
+           OR ($1 = 'email' AND email      = $2)
+     ),
+     chain(id, merged_into_id, depth) AS (
+       SELECT id, merged_into_id, 0 FROM matched
+       UNION ALL
+       SELECT p.id, p.merged_into_id, c.depth + 1
+         FROM data_principal p
+         JOIN chain c ON p.id = c.merged_into_id
+        WHERE c.depth < 16
+     )
+     SELECT DISTINCT id FROM chain WHERE merged_into_id IS NULL`,
     [parsed.channel, parsed.value],
   );
 
@@ -135,10 +159,16 @@ export async function requestOtp(
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
 
+  // The per-destination limit lives in the INSERT's WHERE clause rather than in
+  // a preceding SELECT, so two simultaneous requests cannot both read "2 sent"
+  // and both write a third.
   const { rows } = await executor.query<{ id: string }>(
     `INSERT INTO otp_challenge
        (channel, destination_hash, code_hash, matched_principal_ids, expires_at, ip_hash)
-     VALUES ($1, $2, $3, $4, now() + ($5 || ' minutes')::interval, $6)
+     SELECT $1, $2, $3, $4, now() + ($5 || ' minutes')::interval, $6
+      WHERE (SELECT count(*) FROM otp_challenge
+              WHERE destination_hash = $2
+                AND created_at > now() - interval '15 minutes') < $7
      RETURNING id`,
     [
       parsed.channel,
@@ -147,8 +177,18 @@ export async function requestOtp(
       matches.map((m) => m.id),
       String(TTL_MINUTES),
       ipHash,
+      SENDS_PER_DESTINATION_PER_15_MIN,
     ],
   );
+
+  if (rows.length === 0) {
+    // Over the per-destination limit. This CANNOT answer differently from a
+    // destination that is not in the register, because rows are only ever
+    // written for destinations that ARE - so a distinguishable answer here is a
+    // membership oracle for any phone number or email address in the country.
+    // Same body, same shape, same latency floor. We simply do not send.
+    return settleAfter(startedAt, { challengeId: randomUUID() });
+  }
 
   // Delivery is out of scope for now: in development the code goes to the
   // server console, and a real SMS or email provider slots in here.
@@ -179,69 +219,84 @@ export async function verifyOtp(
   executor: Executor = pool,
 ): Promise<VerifyOutcome | { rateLimited: true }> {
   const startedAt = Date.now();
-  const ipHash = hashIp(ip);
 
-  if (ipHash) {
+  if (ip !== null) {
+    // Counts verification ATTEMPTS, which is what the constant is named after.
+    // The previous version counted challenges created by this IP, and compared
+    // them against a threshold that resolved to 12 - two above the ceiling of 10
+    // that requestOtp already enforces - so it could never fire.
+    //
+    // Read from audit_log rather than a second store: the verify route records
+    // every otp_failed there with the client IP because it is evidence
+    // regardless, and audit_log_action_timestamp_idx already covers exactly this
+    // (action, timestamp) lookup. Same technique as the staff login limiter, so
+    // the limit and the evidence can never disagree.
     const { rows } = await executor.query<{ n: string }>(
-      `SELECT count(*) AS n FROM otp_challenge
-        WHERE ip_hash = $1 AND created_at > now() - interval '1 hour'`,
-      [ipHash],
+      `SELECT count(*) AS n FROM audit_log
+        WHERE action = 'otp_failed'
+          AND "timestamp" > now() - interval '1 hour'
+          AND host(ip_address) = $1`,
+      [ip],
     );
-    if (Number(rows[0].n) * MAX_ATTEMPTS >= VERIFIES_PER_IP_PER_HOUR * 2) {
+    if (Number(rows[0].n) >= VERIFIES_PER_IP_PER_HOUR) {
       return settleAfter(startedAt, { rateLimited: true as const });
     }
   }
 
+  // Claim an attempt slot and read the challenge in ONE statement.
+  //
+  // Every precondition - exists, not consumed, not expired, attempts left - is
+  // in the WHERE clause, and the increment is relative to the stored value
+  // rather than to a value read earlier. Twenty simultaneous guesses therefore
+  // burn twenty attempts and the fifth one onwards match nothing, instead of
+  // all twenty reading attempts=0 and all writing attempts=1.
+  //
   // Looked up by opaque id, never by destination, so this endpoint cannot be
   // used to ask whether a phone number is in the register.
   const { rows } = await executor.query<{
-    id: string;
     code_hash: string;
     attempts: number;
     matched_principal_ids: string[];
-    expired: boolean;
-    consumed: boolean;
   }>(
-    `SELECT id, code_hash, attempts, matched_principal_ids,
-            expires_at <= now()      AS expired,
-            consumed_at IS NOT NULL  AS consumed
-       FROM otp_challenge WHERE id = $1 FOR UPDATE`,
-    [challengeId],
+    `UPDATE otp_challenge
+        SET attempts = attempts + 1
+      WHERE id = $1
+        AND consumed_at IS NULL
+        AND expires_at > now()
+        AND attempts < $2::int
+     RETURNING code_hash, attempts, matched_principal_ids`,
+    [challengeId, MAX_ATTEMPTS],
   );
 
   const challenge = rows[0];
-  if (!challenge || challenge.expired || challenge.consumed) {
-    return settleAfter(startedAt, { ok: false as const });
-  }
-
-  if (challenge.attempts >= MAX_ATTEMPTS) {
-    await executor.query("UPDATE otp_challenge SET consumed_at = now() WHERE id = $1", [
-      challenge.id,
-    ]);
-    return settleAfter(startedAt, { ok: false as const });
-  }
+  if (!challenge) return settleAfter(startedAt, { ok: false as const });
 
   const matched = await bcrypt.compare(code, challenge.code_hash);
 
   if (!matched) {
-    const attempts = challenge.attempts + 1;
-    await executor.query(
-      // Explicit casts: without them Postgres deduces $2 as both the integer
-      // being assigned and an operand of the comparison, and refuses the
-      // statement with 42P08. That failure path is exactly the brute-force
-      // counter, so an uncast version silently never counts an attempt.
-      `UPDATE otp_challenge
-          SET attempts = $2::int,
-              consumed_at = CASE WHEN $2::int >= $3::int THEN now() ELSE consumed_at END
-        WHERE id = $1`,
-      [challenge.id, attempts, MAX_ATTEMPTS],
-    );
+    if (challenge.attempts >= MAX_ATTEMPTS) {
+      await executor.query(
+        "UPDATE otp_challenge SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL",
+        [challengeId],
+      );
+    }
     return settleAfter(startedAt, { ok: false as const });
   }
 
-  await executor.query("UPDATE otp_challenge SET verified_at = now() WHERE id = $1", [
-    challenge.id,
-  ]);
+  // Single use. `consumed_at IS NULL` in the WHERE clause means exactly one
+  // caller can win this, so a code that leaks cannot be replayed into a second
+  // session token. When the contact point resolves to several people the
+  // challenge stays open by design - the token is minted by claimPrincipal
+  // after selection, and that closes it.
+  const single = challenge.matched_principal_ids.length === 1;
+  const consumed = await executor.query(
+    `UPDATE otp_challenge
+        SET verified_at = now(),
+            consumed_at = CASE WHEN $2 THEN now() ELSE consumed_at END
+      WHERE id = $1 AND consumed_at IS NULL`,
+    [challengeId, single],
+  );
+  if (consumed.rowCount === 0) return settleAfter(startedAt, { ok: false as const });
 
   return settleAfter(startedAt, {
     ok: true as const,
@@ -262,23 +317,20 @@ export async function claimPrincipal(
   principalId: string,
   executor: Executor = pool,
 ): Promise<boolean> {
-  const { rows } = await executor.query<{ matched_principal_ids: string[] }>(
-    `SELECT matched_principal_ids FROM otp_challenge
+  // The membership test is part of the same statement that closes the
+  // challenge, so two simultaneous selections naming two different people
+  // cannot both find it open and both mint a token.
+  const { rowCount } = await executor.query(
+    `UPDATE otp_challenge
+        SET consumed_at = now()
       WHERE id = $1
         AND verified_at IS NOT NULL
         AND consumed_at IS NULL
         AND expires_at > now()
-      FOR UPDATE`,
-    [challengeId],
+        AND $2::uuid = ANY (matched_principal_ids)`,
+    [challengeId, principalId],
   );
-
-  const challenge = rows[0];
-  if (!challenge || !challenge.matched_principal_ids.includes(principalId)) return false;
-
-  await executor.query("UPDATE otp_challenge SET consumed_at = now() WHERE id = $1", [
-    challengeId,
-  ]);
-  return true;
+  return rowCount === 1;
 }
 
 /** Names for the disambiguation screen, masked so it is not a household roster. */

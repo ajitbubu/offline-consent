@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { claimPrincipal, parseDestination, requestOtp, verifyOtp } from "@/lib/otp";
+import { pool } from "@/lib/db";
 import { withRollback } from "./helpers/db";
 import type { PoolClient } from "pg";
 
@@ -76,14 +77,67 @@ describe("requestOtp", () => {
     });
   });
 
-  it("stops after three sends to the same destination in fifteen minutes", async () => {
+  it("stops sending after three codes to the same destination in fifteen minutes", async () => {
     await withRollback(async (client) => {
       const phone = uniquePhone();
       await makePerson(client, "Test Person", phone);
       await issue(client, phone);
       await issue(client, phone);
       await issue(client, phone);
-      expect(await requestOtp(phone, null, client)).toEqual({ rateLimited: true });
+
+      const before = await client.query("SELECT count(*)::int AS n FROM otp_challenge");
+      await requestOtp(phone, null, client);
+      const after = await client.query("SELECT count(*)::int AS n FROM otp_challenge");
+
+      // The throttle is real - no fourth code goes out.
+      expect(after.rows[0].n).toBe(before.rows[0].n);
+    });
+  });
+
+  it("answers a throttled real destination exactly as it answers an unknown one", async () => {
+    // REGRESSION (R1). The per-destination limit was checked BEFORE the
+    // principal lookup, and no challenge row is ever written for a destination
+    // that matches nobody - so its count stayed at zero forever and the limit
+    // could only ever fire for someone who IS in the register. Four requests
+    // and a 429 was a membership test for any phone number in the country,
+    // which is Invariant 8 exactly inverted.
+    await withRollback(async (client) => {
+      const known = uniquePhone();
+      const unknown = uniquePhone();
+      await makePerson(client, "Real Person", known);
+
+      for (let i = 0; i < 3; i += 1) {
+        await requestOtp(known, null, client);
+        await requestOtp(unknown, null, client);
+      }
+
+      const knownFourth = await requestOtp(known, null, client);
+      const unknownFourth = await requestOtp(unknown, null, client);
+
+      // Same shape, same keys, neither rate-limited. The only difference
+      // permitted between these two is the random uuid itself.
+      expect("rateLimited" in knownFourth).toBe(false);
+      expect("rateLimited" in unknownFourth).toBe(false);
+      expect(Object.keys(knownFourth).sort()).toEqual(Object.keys(unknownFourth).sort());
+    });
+  });
+
+  it("still rate limits honestly per IP, which reveals nothing about a destination", async () => {
+    await withRollback(async (client) => {
+      const phone = uniquePhone();
+      await makePerson(client, "Test Person", phone);
+      for (let i = 0; i < 10; i += 1) await requestOtp(uniquePhone(), "203.0.113.7", client);
+      // Ten challenges from this IP already exist only if they matched someone;
+      // seed the count directly so the limit is exercised without depending on
+      // how many of those destinations were real.
+      await client.query(
+        `INSERT INTO otp_challenge (channel, destination_hash, code_hash, matched_principal_ids, expires_at, ip_hash)
+         SELECT 'sms', repeat('a', 64), 'x', '{}', now() + interval '5 minutes',
+                encode(sha256(('203.0.113.7' || $1)::bytea), 'hex')
+           FROM generate_series(1, 10)`,
+        [process.env.OTP_PEPPER ?? ""],
+      );
+      expect(await requestOtp(phone, "203.0.113.7", client)).toEqual({ rateLimited: true });
     });
   });
 });
@@ -129,6 +183,69 @@ describe("verifyOtp", () => {
     });
   });
 
+  it("cannot be replayed: a verified single-principal challenge is consumed", async () => {
+    // REGRESSION (R2). verifyOtp set verified_at and never consumed_at on the
+    // one-person path, so the same six digits minted a fresh 15-minute session
+    // for the whole 5-minute TTL. The household path always closed the
+    // challenge (claimPrincipal); the ordinary path did not.
+    await withRollback(async (client) => {
+      const phone = uniquePhone();
+      await makePerson(client, "Replay Person", phone);
+      const issued = await issue(client, phone);
+
+      expect(await verifyOtp(issued.challengeId, issued.devCode!, null, client))
+        .toMatchObject({ ok: true });
+      expect(await verifyOtp(issued.challengeId, issued.devCode!, null, client))
+        .toEqual({ ok: false });
+    });
+  });
+
+  it("burns one attempt per concurrent guess, not one in total", async () => {
+    // REGRESSION (R5). Every FOR UPDATE in this module ran on the pool, so the
+    // lock was released at statement end and N concurrent verifies all read
+    // attempts=0 and all wrote attempts=1. MAX_ATTEMPTS capped sequential
+    // guessing only.
+    //
+    // This one cannot use withRollback: work sharing a single client is
+    // serialised by pg, which is exactly the condition that hides the bug. It
+    // runs on the pool so each verify gets its own connection, and cleans up
+    // after itself instead.
+    const phone = uniquePhone();
+    let principalId: string | undefined;
+    let challengeId: string | undefined;
+    try {
+      const { rows } = await pool.query<{ id: string }>(
+        "INSERT INTO data_principal (full_name, phone_e164) VALUES ($1, $2) RETURNING id",
+        ["Concurrent Person", phone],
+      );
+      principalId = rows[0].id;
+
+      const issued = await requestOtp(phone, null);
+      if ("rateLimited" in issued) throw new Error("unexpectedly rate limited");
+      challengeId = issued.challengeId;
+
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () => verifyOtp(challengeId!, "000000", null)),
+      );
+      expect(results.every((r) => "ok" in r && r.ok === false)).toBe(true);
+
+      const { rows: after } = await pool.query<{ attempts: number }>(
+        "SELECT attempts FROM otp_challenge WHERE id = $1",
+        [challengeId],
+      );
+      // Four simultaneous wrong guesses must cost four of the five attempts.
+      // Before the fix this was 1.
+      expect(after[0].attempts).toBe(4);
+    } finally {
+      if (challengeId) {
+        await pool.query("DELETE FROM otp_challenge WHERE id = $1", [challengeId]);
+      }
+      if (principalId) {
+        await pool.query("DELETE FROM data_principal WHERE id = $1", [principalId]);
+      }
+    }
+  });
+
   it("refuses an expired challenge", async () => {
     await withRollback(async (client) => {
       const phone = uniquePhone();
@@ -168,6 +285,33 @@ describe("verifyOtp", () => {
       if ("principalIds" in result) {
         expect(result.principalIds.sort()).toEqual([a, b].sort());
       }
+    });
+  });
+
+  it("rate limits verification per IP, a limit that could not previously fire", async () => {
+    // The old threshold compared challenge count against VERIFIES_PER_IP_PER_HOUR
+    // * 2 / MAX_ATTEMPTS, i.e. 12 - two above the ceiling of 10 that requestOtp
+    // itself enforces - so it was unreachable arithmetic. It now counts actual
+    // attempts from audit_log, which is where the verify route already records
+    // every otp_failed because that is evidence regardless.
+    await withRollback(async (client) => {
+      const ip = "203.0.113.42";
+      const phone = uniquePhone();
+      await makePerson(client, "Test Person", phone);
+      const { challengeId } = await issue(client, phone);
+
+      // A wrong code is still refused before the limit bites.
+      expect(await verifyOtp(challengeId, "000000", ip, client)).toEqual({ ok: false });
+
+      await client.query(
+        `INSERT INTO audit_log (action, actor_type, ip_address)
+         SELECT 'otp_failed', 'system', $1::inet FROM generate_series(1, 30)`,
+        [ip],
+      );
+
+      expect(await verifyOtp(challengeId, "000000", ip, client)).toEqual({ rateLimited: true });
+      // A different IP is unaffected: the limit is per caller, not global.
+      expect(await verifyOtp(challengeId, "000000", "198.51.100.9", client)).toEqual({ ok: false });
     });
   });
 });

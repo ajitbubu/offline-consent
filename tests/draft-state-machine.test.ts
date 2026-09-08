@@ -73,6 +73,28 @@ describe("phone normalisation", () => {
     }
   });
 
+  it("refuses a number whose shape is E.164 but whose country does not exist", () => {
+    // The regex this replaced accepted any +-prefixed E.164 shape, so these all
+    // passed validation, were stored, and left the person permanently
+    // unreachable - the silent s.6(4) failure the module is written to avoid.
+    for (const bad of ["+9999999999999", "+0123456789", "+99912345678"]) {
+      expect(normalisePhone(bad)).toBeNull();
+    }
+  });
+
+  it("refuses a landline, because a one-time code cannot arrive on one", () => {
+    // 1234567890 is a structurally valid Indian fixed line. Validating shape
+    // alone would store it; the code would then never arrive and nothing would
+    // record why.
+    expect(normalisePhone("1234567890")).toBeNull();
+    expect(normalisePhone("+91 1234567890")).toBeNull();
+  });
+
+  it("keeps a mobile from outside India, since paper does not promise one country", () => {
+    expect(normalisePhone("+1 415 555 2671")).toBe("+14155552671");
+    expect(normalisePhone("+44 7400 123456")).toBe("+447400123456");
+  });
+
   it("does not fold distinct email addresses together", () => {
     // Stripping Gmail dots or +tags would merge two real people and leak one
     // person's consent state into the other's record.

@@ -11,6 +11,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { pool, type Executor } from "@/lib/db";
+import { env } from "@/lib/env";
 import { writeAudit, type ComplianceTag } from "@/lib/audit";
 import {
   intakeModeForSource,
@@ -20,6 +21,7 @@ import {
   type ValidationIssue,
 } from "@/lib/consent";
 import { normaliseEmail, normalisePhone } from "@/lib/phone";
+import { resolvePrincipalId } from "@/lib/principal";
 
 /* -------------------------------------------------------------------------- */
 /* Payload                                                                    */
@@ -77,6 +79,15 @@ export const emptyPayload = (): DraftPayload => ({
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Today, as a civil date in the register's own timezone.
+ *
+ * 'en-CA' formats as YYYY-MM-DD, which compares correctly against the
+ * 'YYYY-MM-DD' strings the DATE parser in db.ts returns.
+ */
+const todayInAppZone = (): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: env.APP_TIMEZONE }).format(new Date());
+
+/**
  * Errors block a commit; warnings do not.
  *
  * A phone number that will not normalise is an ERROR, not a warning. Storing it
@@ -124,6 +135,7 @@ export function validateDraft(
   if (payload.items.length === 0) {
     issues.push({ field: "items", severity: "error", message: "Record at least one purpose" });
   }
+  const seenPurposeIds = new Set<string>();
   for (const item of payload.items) {
     if (!knownPurposeIds.has(item.purposeId)) {
       issues.push({
@@ -132,13 +144,32 @@ export function validateDraft(
         message: `"${item.verbatimLabel}" is not mapped to a purpose in the catalogue`,
       });
     }
+    // One purpose, one answer. The artifact items are written with ON CONFLICT
+    // DO NOTHING (first wins) while the projection loop below overwrites (last
+    // wins), so a duplicated purpose made the immutable evidence and the
+    // mutable record disagree about the same tick-box - the exact divergence
+    // the artifact/record split exists to prevent. Refused rather than
+    // silently resolved: which answer the paper really gave is a question for
+    // the reviewer, not for a tie-break rule.
+    if (seenPurposeIds.has(item.purposeId)) {
+      issues.push({
+        field: "items",
+        severity: "error",
+        message: `"${item.verbatimLabel}" appears twice. Record one answer per purpose.`,
+      });
+    }
+    seenPurposeIds.add(item.purposeId);
   }
 
   if (payload.collectedOn) {
     const collected = new Date(`${payload.collectedOn}T00:00:00Z`);
     if (Number.isNaN(collected.getTime())) {
       issues.push({ field: "collectedOn", severity: "error", message: "Not a valid date" });
-    } else if (collected.getTime() > Date.now()) {
+    } else if (payload.collectedOn > todayInAppZone()) {
+      // Compared as civil dates in the register's own timezone. Comparing a
+      // paper date against an instant used to reject a form dated today for
+      // anyone working between midnight and 05:30 IST, because UTC was still on
+      // yesterday's date.
       issues.push({
         field: "collectedOn",
         severity: "error",
@@ -151,6 +182,21 @@ export function validateDraft(
         message: "This form is unusually old. Check the year on the scan.",
       });
     }
+  }
+
+  // consent_artifact_date_matches_precision (migration 005) enforces this pairing
+  // at the database. Without a mirror here it was only discovered at the artifact
+  // INSERT, inside the commit transaction and after identity resolution, where it
+  // surfaced to the reviewer as an unexplained 500 with no field to correct.
+  if ((payload.collectedOnPrecision === "unknown") !== (payload.collectedOn === null)) {
+    issues.push({
+      field: "collectedOn",
+      severity: "error",
+      message:
+        payload.collectedOn === null
+          ? "Enter the date on the form, or set the precision to \"Undated form\""
+          : "An undated form cannot carry a date. Clear the date or change the precision.",
+    });
   }
 
   if (payload.collectedOnPrecision === "unknown") {
@@ -249,7 +295,8 @@ export type CommitErrorCode =
   | "draft_not_found"
   | "draft_not_reviewable"
   | "validation_failed"
-  | "possible_duplicate";
+  | "possible_duplicate"
+  | "already_recorded";
 
 export class CommitError extends Error {
   constructor(
@@ -347,9 +394,18 @@ export async function commitDraft(
   let principalId: string;
 
   if (chosenId) {
+    // The reviewer's choice, or the match frozen on the draft, may since have
+    // been merged into somebody else. This used to check only that the row
+    // existed, so the artifact and its consent records were attached to the
+    // absorbed identity - invisible to the portal, which resolves through the
+    // chain, and so unwithdrawable.
+    const resolvedId = await resolvePrincipalId(chosenId, client);
+    if (resolvedId === null) {
+      throw new CommitError("draft_not_found", "Selected person no longer exists");
+    }
     const { rows } = await client.query<{ id: string }>(
       "SELECT id FROM data_principal WHERE id = $1 FOR UPDATE",
-      [chosenId],
+      [resolvedId],
     );
     if (rows.length === 0) throw new CommitError("draft_not_found", "Selected person no longer exists");
     principalId = rows[0].id;
@@ -388,6 +444,53 @@ export async function commitDraft(
     }
   }
 
+  /* -- 2b. Learn a contact point we did not already have -------------------- */
+
+  // matchPrincipal resolves on phone OR email, so a second form that supplies
+  // an email for someone we only had a phone number for matched that person and
+  // then dropped the email on the floor. Reachability is the whole of s.6(4):
+  // a contact point the paper gave us and we did not store is a withdrawal
+  // route this person will never have, and nothing anywhere would show it.
+  //
+  // COALESCE only ever fills a gap. An existing contact point is never
+  // overwritten - that would be a correction, which is a human's decision.
+  if (phone !== null || email !== null) {
+    const { rows: enriched } = await client.query<{
+      phone_e164: string | null;
+      email: string | null;
+    }>(
+      `UPDATE data_principal
+          SET phone_e164 = COALESCE(phone_e164, $2),
+              email      = COALESCE(email, $3)
+        WHERE id = $1
+          AND ((phone_e164 IS NULL AND $2::text IS NOT NULL)
+            OR (email      IS NULL AND $3::text IS NOT NULL))
+      RETURNING phone_e164, email`,
+      [principalId, phone, email],
+    );
+
+    if (enriched.length > 0) {
+      await writeAudit(
+        {
+          action: "consent_digitised",
+          actorType: "staff",
+          actorId: input.staffId,
+          dataPrincipalId: principalId,
+          newState: {
+            change: "contact_point_learned",
+            fromDraft: draft.id,
+            hasPhone: enriched[0].phone_e164 !== null,
+            hasEmail: enriched[0].email !== null,
+          },
+          complianceTags: ["dpdp_s6_4"],
+          ipAddress: input.ipAddress ?? null,
+          userAgent: input.userAgent ?? null,
+        },
+        client,
+      );
+    }
+  }
+
   /* -- 3. The artifact ----------------------------------------------------- */
 
   const payloadHash = createHash("sha256")
@@ -395,15 +498,54 @@ export async function commitDraft(
       canonicalJson({
         principal: { fullName: payload.principal.fullName.trim(), phone, email },
         noticeId: payload.noticeId,
+        noticeAtCollection: payload.noticeAtCollection,
         collectedOn: payload.collectedOn,
+        collectedOnPrecision: payload.collectedOnPrecision,
+        collectionLocation: payload.collectionLocation,
+        // The verbatim label is the wording the person actually ticked, which
+        // is the most legally significant thing on the artifact and was outside
+        // the integrity hash entirely. Two artifacts that recorded different
+        // printed wording used to hash identically.
         items: [...payload.items]
-          .map((i) => ({ purposeId: i.purposeId, granted: i.granted }))
+          .map((i) => ({
+            purposeId: i.purposeId,
+            granted: i.granted,
+            verbatimLabel: i.verbatimLabel,
+          }))
           .sort((a, b) => (a.purposeId < b.purposeId ? -1 : 1)),
         evidenceId: draft.evidence_id,
         signatureEvidenceId: draft.signature_evidence_id,
       }),
     )
     .digest("hex");
+
+  // Has this exact form already been recorded for this person?
+  //
+  // payload_hash has existed since migration 005, described as deterministic so
+  // the same content always hashes to the same digest, and nothing has ever read
+  // it back. The cost of that showed up the first time a CSV was imported twice:
+  // the same person acquired two byte-identical artifacts and nothing noticed.
+  // Artifacts are append-only, so a duplicate cannot be tidied away afterwards -
+  // it sits in the evidence record forever, and a DPO reading "Paper on file (4)"
+  // has no way to tell that two of them are one form counted twice.
+  //
+  // Refusing is the safe direction. Two genuinely separate forms, signed on the
+  // same day by the same person with identical answers and the same scan, are
+  // indistinguishable from a double submission - and of those two readings, the
+  // accidental one is overwhelmingly the likelier.
+  const { rows: existingArtifact } = await client.query<{ id: string; committed_at: Date }>(
+    `SELECT id, committed_at FROM consent_artifact
+      WHERE data_principal_id = $1 AND payload_hash = $2
+      LIMIT 1`,
+    [principalId, payloadHash],
+  );
+  if (existingArtifact.length > 0) {
+    throw new CommitError(
+      "already_recorded",
+      "This exact form is already on file for this person",
+      { artifactId: existingArtifact[0].id, committedAt: existingArtifact[0].committed_at },
+    );
+  }
 
   const { rows: artifactRows } = await client.query<{ id: string }>(
     `INSERT INTO consent_artifact
@@ -447,50 +589,101 @@ export async function commitDraft(
   const withheldPurposeIds: string[] = [];
   let recordsWritten = 0;
 
-  for (const item of payload.items) {
-    const { rows: existingRows } = await client.query<{
-      id: string;
-      status: string;
-      withdrawn_at: Date | null;
-      consent_given_on: string | null;
-      version: number;
-    }>(
-      `SELECT id, status, withdrawn_at, consent_given_on, version
-         FROM consent_record
-        WHERE data_principal_id = $1 AND purpose_id = $2
-        FOR UPDATE`,
-      [principalId, item.purposeId],
-    );
-    const existing = existingRows[0];
+  // Locks are taken in purpose id order, always. Two commits for the same
+  // person whose forms list the purposes in different orders would otherwise
+  // take the same row locks in opposite orders and deadlock, which surfaces as
+  // 40P01 and, having no CommitError mapping, as a bare 500.
+  const projectionItems = [...payload.items].sort((a, b) =>
+    a.purposeId < b.purposeId ? -1 : a.purposeId > b.purposeId ? 1 : 0,
+  );
 
-    if (!existing) {
-      await client.query(
-        `INSERT INTO consent_record
-           (data_principal_id, purpose_id, status, source_artifact_id, consent_given_on)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          principalId,
-          item.purposeId,
-          item.granted ? "active" : "declined",
-          artifactId,
-          payload.collectedOn,
-        ],
-      );
+  for (const item of projectionItems) {
+    // Insert first, rather than SELECT ... FOR UPDATE then INSERT.
+    //
+    // FOR UPDATE cannot lock a row that does not exist, so the old order let
+    // two concurrent commits both find nothing and both insert, and the loser
+    // hit consent_record_one_per_purpose - which is not a CommitError, so the
+    // operator got "Something went wrong" and lost the commit with no way to
+    // tell why. Two drafts from the same scanning stack is the routine case,
+    // not an exotic one.
+    //
+    // ON CONFLICT DO NOTHING also makes us wait for a concurrent transaction
+    // that is mid-insert, so by the time we fall through to the read below
+    // there is always a row to lock.
+    const inserted = await client.query(
+      `INSERT INTO consent_record
+         (data_principal_id, purpose_id, status, source_artifact_id, consent_given_on)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (data_principal_id, purpose_id) DO NOTHING`,
+      [
+        principalId,
+        item.purposeId,
+        item.granted ? "active" : "declined",
+        artifactId,
+        payload.collectedOn,
+      ],
+    );
+    if (inserted.rowCount === 1) {
       recordsWritten += 1;
       continue;
     }
 
-    // The rule that is easy to get wrong. A form digitised today may have been
-    // signed years ago; if the person has withdrawn since, committing it must
-    // not resurrect the consent they took back. An undated form counts as
-    // "cannot prove it postdates the withdrawal", so it is withheld too.
+    const { rows: existingRows } = await client.query<{
+      id: string;
+      status: string;
+      withdrawn_on: string | null;
+      consent_given_on: string | null;
+      version: number;
+    }>(
+      // withdrawn_at is a TIMESTAMPTZ and collected_on is a date off a piece of
+      // paper. Rendering the instant in UTC to compare them - which is what
+      // .toISOString() did - dated every withdrawal made between 00:00 and
+      // 05:30 IST a day early, and a day early is enough to make a withdrawal
+      // look older than the form and be overridden by it. Cast to a civil date
+      // in the register's own timezone here, so both sides of every comparison
+      // below are 'YYYY-MM-DD' strings and no JS Date is involved at all.
+      `SELECT id, status, consent_given_on, version,
+              (withdrawn_at AT TIME ZONE $3)::date AS withdrawn_on
+         FROM consent_record
+        WHERE data_principal_id = $1 AND purpose_id = $2
+        FOR UPDATE`,
+      [principalId, item.purposeId, env.APP_TIMEZONE],
+    );
+    // The insert above conflicted, so a row exists and this locks it.
+    const existing = existingRows[0];
+    if (!existing) {
+      throw new CommitError(
+        "draft_not_found",
+        "The consent record for this purpose disappeared while committing",
+      );
+    }
+
+    // The rules that are easy to get wrong, and they are one rule: a form only
+    // wins if it can be SHOWN to be later. Everything here is a comparison
+    // between two civil dates.
+    //
+    //   collectedOn NULL ──► never resurrects, never supersedes
+    //   withdrawn_on >= collectedOn ──► withhold  (a tie cannot be ordered)
+    //   consent_given_on > collectedOn ──► skip   (an older form)
+    //   otherwise ──► write
+
+    // An undated form proves no ordering against anything. Invariant 6 already
+    // says so for a withdrawal; it is equally true of a dated active record,
+    // which the supersession check below used to let an undated form overwrite
+    // because it required BOTH dates to be non-null before it would skip.
+    if (payload.collectedOn === null) {
+      if (existing.status === "withdrawn") withheldPurposeIds.push(item.purposeId);
+      continue;
+    }
+
+    // A form digitised today may have been signed years ago; if the person has
+    // withdrawn since, committing it must not resurrect the consent they took
+    // back. `>=` rather than `>`: a withdrawal and a form on the SAME day
+    // cannot be ordered from day-precision data, and auth.ts:revokedBy already
+    // resolves exactly this tie toward refusing, which is the right direction
+    // for a register of this kind.
     if (existing.status === "withdrawn") {
-      const withdrawnAt = existing.withdrawn_at;
-      const cannotProveNewer =
-        payload.collectedOn === null ||
-        (withdrawnAt !== null &&
-          withdrawnAt.toISOString().slice(0, 10) > payload.collectedOn);
-      if (cannotProveNewer) {
+      if (existing.withdrawn_on === null || existing.withdrawn_on >= payload.collectedOn) {
         withheldPurposeIds.push(item.purposeId);
         continue;
       }
@@ -498,11 +691,7 @@ export async function commitDraft(
 
     // Two forms for the same purpose: the later signature wins. An existing
     // record sourced from a newer form is left alone.
-    if (
-      existing.consent_given_on !== null &&
-      payload.collectedOn !== null &&
-      existing.consent_given_on > payload.collectedOn
-    ) {
+    if (existing.consent_given_on !== null && existing.consent_given_on > payload.collectedOn) {
       continue;
     }
 

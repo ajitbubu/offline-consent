@@ -15,6 +15,7 @@ import jwt from "jsonwebtoken";
 import { cookies } from "next/headers";
 import { env } from "@/lib/env";
 import { query } from "@/lib/db";
+import { resolvePrincipalId } from "@/lib/principal";
 import { isStaffRole, roleAtLeast, type StaffRole } from "@/lib/consent";
 
 export const STAFF_AUDIENCE = "offline-consent-staff";
@@ -209,11 +210,8 @@ export async function requirePrincipal(request: Request): Promise<PrincipalConte
 
   const { context, issuedAt } = verifyPrincipalToken(token);
 
-  const { rows } = await query<{
-    portal_tokens_valid_from: Date | null;
-    merged_into_id: string | null;
-  }>(
-    "SELECT portal_tokens_valid_from, merged_into_id FROM data_principal WHERE id = $1",
+  const { rows } = await query<{ portal_tokens_valid_from: Date | null }>(
+    "SELECT portal_tokens_valid_from FROM data_principal WHERE id = $1",
     [context.principalId],
   );
 
@@ -223,7 +221,28 @@ export async function requirePrincipal(request: Request): Promise<PrincipalConte
     throw new AuthError(401, "Session has been revoked");
   }
 
-  return context;
+  // Follow the merge chain. This row previously read merged_into_id and did
+  // nothing with it, so a token issued before a DPO merged this person into
+  // another kept resolving to the absorbed identity - whose consent records the
+  // portal would then show as the whole story, and whose withdraw button would
+  // act on nothing.
+  const survivingId = await resolvePrincipalId(context.principalId);
+  if (survivingId === null) throw new AuthError(401, "Record not found");
+
+  if (survivingId !== context.principalId) {
+    // The survivor's own revocation cutoff applies too: revoking the person
+    // must not be defeated by presenting a token minted for the identity that
+    // was folded into them.
+    const { rows: surviving } = await query<{ portal_tokens_valid_from: Date | null }>(
+      "SELECT portal_tokens_valid_from FROM data_principal WHERE id = $1",
+      [survivingId],
+    );
+    if (revokedBy(issuedAt, surviving[0]?.portal_tokens_valid_from ?? null)) {
+      throw new AuthError(401, "Session has been revoked");
+    }
+  }
+
+  return { principalId: survivingId };
 }
 
 /* -------------------------------------------------------------------------- */

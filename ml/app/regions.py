@@ -129,14 +129,37 @@ def _vertical_dividers(mask: np.ndarray) -> list[int]:
     return merged
 
 
+def _even_run(dividers: list[int]) -> list[int]:
+    """The longest evenly spaced RUN of dividers, not the whole list.
+
+    Judging the whole list at once made the reading depend on where the band
+    happened to stop. A comb runs the full width of its field; a band cut short
+    holds part of one, and one stray rule sharing the band with a real comb
+    pushed the spread over COMB_MAX_SPACING_CV and threw the comb away.
+
+    A run is the right unit because it is the thing that is actually being
+    recognised: five or more dividers at a consistent pitch are character
+    cells, whatever else is ruled beside them.
+    """
+    if len(dividers) < COMB_MIN_CELLS + 1:
+        return []
+    best: list[int] = []
+    for start in range(len(dividers) - COMB_MIN_CELLS):
+        for end in range(start + COMB_MIN_CELLS + 1, len(dividers) + 1):
+            run = dividers[start:end]
+            gaps = np.diff(run).astype(float)
+            if gaps.size == 0 or gaps.mean() <= 0:
+                continue
+            if float(gaps.std() / gaps.mean()) > COMB_MAX_SPACING_CV:
+                break
+            if len(run) > len(best):
+                best = run
+    return best
+
+
 def _looks_like_comb(dividers: list[int]) -> bool:
     """Evenly spaced dividers mean character cells rather than stray strokes."""
-    if len(dividers) < COMB_MIN_CELLS + 1:
-        return False
-    gaps = np.diff(dividers).astype(float)
-    if gaps.size == 0 or gaps.mean() <= 0:
-        return False
-    return float(gaps.std() / gaps.mean()) <= COMB_MAX_SPACING_CV
+    return len(_even_run(dividers)) >= COMB_MIN_CELLS + 1
 
 
 def classify(
@@ -177,9 +200,9 @@ def classify(
     #    Structure beats content: five or more evenly spaced full-height
     #    dividers are character cells whatever is printed between them, and
     #    prose does not produce them.
-    dividers = _vertical_dividers(mask)
-    if _looks_like_comb(dividers):
-        return Region("comb", (x0 + dividers[0], y0, x0 + dividers[-1], y1), len(dividers) - 1)
+    run = _even_run(_vertical_dividers(mask))
+    if len(run) >= COMB_MIN_CELLS + 1:
+        return Region("comb", (x0 + run[0], y0, x0 + run[-1], y1), len(run) - 1)
 
     # 2. PROSE in the band - not merely text.
     #

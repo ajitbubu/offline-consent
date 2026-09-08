@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BellRing, CopyCheck, FileText, Inbox, LayoutDashboard, LifeBuoy, LogOut, OctagonX, Users } from "lucide-react";
+import { BellRing, CopyCheck, FileText, FolderSearch, Inbox, LayoutDashboard, LifeBuoy, LogOut, OctagonX, Users } from "lucide-react";
 import { roleAtLeast, staffRoleLabels, type StaffRole } from "@/lib/consent";
 
 /**
@@ -22,6 +22,9 @@ const LINKS = [
   { href: "/staff", label: "Overview", icon: LayoutDashboard, minimum: "operator", group: "work" },
   { href: "/staff/intake/new", label: "New form", icon: FileText, minimum: "operator", group: "work" },
   { href: "/staff/review", label: "Review", icon: Inbox, minimum: "operator", group: "work" },
+  // Reads documents and commits nothing, so it sits with the work an operator
+  // does rather than behind the DPO wall.
+  { href: "/staff/documents", label: "Scan documents", icon: FolderSearch, minimum: "operator", group: "work" },
   { href: "/staff/principals", label: "Register", icon: Users, minimum: "dpo", group: "dpo" },
   { href: "/staff/duplicates", label: "Duplicates", icon: CopyCheck, minimum: "dpo", group: "dpo" },
   { href: "/staff/notices", label: "Notices", icon: BellRing, minimum: "dpo", group: "dpo" },

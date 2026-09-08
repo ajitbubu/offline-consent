@@ -53,7 +53,7 @@ from app.contract import FieldRequest, FieldResult, Page, Token
 
 if TYPE_CHECKING:  # pragma: no cover - import only for the type
     from PIL.Image import Image
-from app.tickbox import find_anchor, find_anchors
+from app.tickbox import find_anchor, find_anchors, normalise
 
 # Below this the printed label was not really found, so anything read beside it
 # would be a reading of an arbitrary patch of paper. Matches tickbox.py.
@@ -397,6 +397,25 @@ def _span_box(tokens: list[Token]) -> tuple[int, int, int, int] | None:
 # beat a genuinely better match.
 LABEL_PUNCTUATION_BONUS = 0.15
 
+# Section HEADERS are not field labels, and they collide with them by design.
+# "Applicant Details" is a heading over a block of fields; "Applicant Name" is
+# one of the fields under it. They share their first word, so a label list
+# containing "Applicant Name" matches the HEADER strongly - and a header has
+# nothing written beside it, so the read returns null while the real field sits
+# unexamined two lines below.
+#
+# Measured on FILLED_Account_Opening_Savings_Form.pdf: the anchor landed on
+# "Applicant Details" at 0.82 and the field returned None, with
+# RAHUL TESTKUMAR SHARMA perfectly legible in the comb cells underneath. It is
+# the same shape as the prose case below - a match that is not a label - so it
+# belongs in the same guard.
+#
+# Penalised harder than the punctuation bonus can win back, because a header
+# frequently scores BETTER than the field it heads: it is shorter, so the fuzzy
+# ratio against a two-word label is higher.
+SECTION_HEADER_PENALTY = 0.5
+_SECTION_NOUNS = frozenset({"detail", "details", "information", "particulars"})
+
 
 def _label_bonus(tokens: list[Token], end_index: int) -> float:
     """Does this match look like a field label rather than words in a sentence?
@@ -417,6 +436,13 @@ def _label_bonus(tokens: list[Token], end_index: int) -> float:
         last = tokens[end_index - 1].text.strip()
         if last.endswith(":") or last.endswith("*:") or last.endswith("*"):
             return LABEL_PUNCTUATION_BONUS
+
+    # A section header, not a field. Checked before the prose test because
+    # "Details" carries no punctuation and would otherwise score as neutral.
+    if end_index < len(tokens):
+        following = normalise(tokens[end_index].text)
+        if following in _SECTION_NOUNS:
+            return -SECTION_HEADER_PENALTY
 
     # Matched INSIDE a phrase, not at the end of a label. The SBI form's
     # section header reads "...sent on provided Mobile No./Email-ID)", where

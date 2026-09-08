@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from app.engines.base import Engine
+from app.engines.documentai_engine import DocumentAIEngine
 from app.engines.tesseract_engine import TesseractEngine
+from app.engines.vision_engine import VisionEngine
 
 _ENGINES: dict[str, type] = {
     TesseractEngine.name: TesseractEngine,
+    DocumentAIEngine.name: DocumentAIEngine,
+    VisionEngine.name: VisionEngine,
 }
 
 DEFAULT_ENGINE = TesseractEngine.name

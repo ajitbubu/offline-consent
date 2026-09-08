@@ -1,0 +1,50 @@
+{
+  "_comment": "PLACEHOLDER, NOT CAPTURED. Hand-shaped from the documented full_text_annotation schema. Vertices are ABSOLUTE PIXELS in the submitted image (1700x2200 here), which is the real difference from the Document AI fixture. Replace with one captured response before trusting geometry.",
+  "pages": [
+    {
+      "blocks": [
+        {
+          "paragraphs": [
+            {
+              "words": [
+                {
+                  "confidence": 0.99,
+                  "symbols": [{"text":"F"},{"text":"u"},{"text":"l"},{"text":"l"}],
+                  "boundingBox": {"vertices":[{"x":136,"y":220},{"x":272,"y":220},{"x":272,"y":286},{"x":136,"y":286}]}
+                },
+                {
+                  "confidence": 0.98,
+                  "symbols": [{"text":"n"},{"text":"a"},{"text":"m"},{"text":"e"},{"text":":"}],
+                  "boundingBox": {"vertices":[{"x":289,"y":220},{"x":408,"y":220},{"x":408,"y":286},{"x":289,"y":286}]}
+                },
+                {
+                  "_case": "handwritten, ROTATED: vertices do not start top-left. min/max over all four is what keeps this box valid.",
+                  "confidence": 0.91,
+                  "symbols": [{"text":"P"},{"text":"R"},{"text":"I"},{"text":"Y"},{"text":"A"}],
+                  "boundingBox": {"vertices":[{"x":714,"y":308},{"x":476,"y":286},{"x":476,"y":198},{"x":714,"y":220}]}
+                },
+                {
+                  "confidence": 0.88,
+                  "symbols": [{"text":"S"},{"text":"H"},{"text":"A"},{"text":"R"},{"text":"M"},{"text":"A"}],
+                  "boundingBox": {"vertices":[{"x":748,"y":220},{"x":986,"y":220},{"x":986,"y":308},{"x":748,"y":308}]}
+                },
+                {
+                  "_case": "degenerate: zero-area box. Must be dropped.",
+                  "confidence": 0.30,
+                  "symbols": [{"text":"D"},{"text":"a"},{"text":"t"},{"text":"e"}],
+                  "boundingBox": {"vertices":[{"x":1020,"y":440},{"x":1020,"y":440},{"x":1020,"y":440},{"x":1020,"y":440}]}
+                },
+                {
+                  "_case": "symbols present but all whitespace. Must be dropped.",
+                  "confidence": 0.95,
+                  "symbols": [{"text":" "}],
+                  "boundingBox": {"vertices":[{"x":1190,"y":660},{"x":1258,"y":660},{"x":1258,"y":726},{"x":1190,"y":726}]}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

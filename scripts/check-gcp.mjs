@@ -108,9 +108,15 @@ if (missing > 0) {
   console.log("    3. gcloud services enable documentai.googleapis.com vision.googleapis.com");
   console.log("    4. gcloud auth application-default login");
   console.log("");
-  console.log("  Then for Document AI only, create a processor and copy its id:");
-  console.log("    gcloud documentai processors create \\");
-  console.log("      --location=asia-south1 --type=OCR_PROCESSOR --display-name=consent-ocr");
+  console.log("  Then for Document AI only, create a processor and copy its id.");
+  console.log("  NOTE: gcloud has NO documentai command group - not in stable, alpha");
+  console.log("  or beta. Use the REST API or the Console. Verified 2026-09-08.");
+  console.log("");
+  console.log("    TOKEN=$(gcloud auth print-access-token)");
+  console.log("    curl -s -X POST -H \"Authorization: Bearer $TOKEN\" \\");
+  console.log("      -H \"Content-Type: application/json\" \\");
+  console.log("      https://asia-south1-documentai.googleapis.com/v1/projects/$GOOGLE_CLOUD_PROJECT/locations/asia-south1/processors \\");
+  console.log("      -d '{\"type\":\"OCR_PROCESSOR\",\"displayName\":\"consent-ocr\"}'");
   console.log("");
   process.exit(1);
 }

@@ -13,6 +13,7 @@
     "db:reset": "node --env-file-if-exists=.env scripts/reset-db.mjs",
     "calibrate": "node --env-file-if-exists=.env scripts/calibrate-tickbox.mjs",
     "extract:batch": "node --env-file-if-exists=.env scripts/extract-batch.mjs",
+    "import:folder": "node --env-file-if-exists=.env scripts/import-folder.mjs",
     "sample:form": "node --env-file-if-exists=.env scripts/make-sample-form.mjs",
     "test": "vitest run"
   },

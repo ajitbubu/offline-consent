@@ -425,6 +425,19 @@ that does not exist here. That scaffolding is the actual work, not the specs.
 
 ## 7. Smaller things
 
+- **`ocr_tokens` is retained for a purpose that has been withdrawn.**
+  `migrations/008_create_intake.sql:45-48` justifies keeping word-level OCR output on
+  committed drafts explicitly: "the pair (tokens, human-verified payload) IS the training
+  set for the extraction model." The approved extraction design
+  (`docs/designs/cloud-ocr-llm-field-extraction.md`, Premise 4) cancels the layout-model
+  track and re-scopes that corpus to an evaluation set. So the register now holds names,
+  phones and emails from every scanned form indefinitely, under a written justification
+  that is no longer true - a storage-limitation problem under s.8(7) and NFR-1.
+  Created by the scope reduction in the eng review, not by the cloud engine.
+  *Fix:* either a bounded retention window on `ocr_tokens` with a purge job, or a rewritten
+  justification naming evaluation as the purpose and bounding how long.
+  **Depends on** the DPO conversation the FR-17 amendment already requires - it can ride along.
+
 - **The tick-box threshold is now demonstrably too low.** On a rendered form
   with boxes 1 and 3 ticked, real ticks measured `ink_ratio` 0.556 and empty
   boxes 0.000 - but one box whose printed label wraps to two lines measured

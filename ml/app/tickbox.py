@@ -256,6 +256,89 @@ def _locate_box(
     )
 
 
+# A located region is only a tick-box if it LOOKS like one. Without this check
+# _locate_box returns the leftmost ink run in the band whatever it is, and when
+# the band holds no box at all - because the layout puts the box on the other
+# side, or the previous option's label runs long - that run is printed text.
+# Printed text has ink density 0.47-0.68 against INK_THRESHOLD 0.08, so it reads
+# as a confident tick. Measured on a real SMBC savings form: 6 of 12 UNTICKED
+# options reported granted=true at confidence 1.00, and the "box" scored for
+# Housewife was the letters "ed" from "Self Employed".
+#
+# THE TEST IS ENCLOSURE, NOT DENSITY. A first attempt used a perimeter-ink
+# ceiling and broke seven passing tests, because perimeter is NOT monotonic:
+#
+#     synthetic tick, border captured     perimeter 1.000
+#     real SMBC tick, only the mark       perimeter 0.080 - 0.130
+#     printed glyph                       perimeter 0.211 - 0.434
+#
+# A box is EITHER its own border (perimeter high) OR a mark sitting inside one
+# (perimeter low, border just outside). The glyph falls between the two, so any
+# single threshold overfits to whichever form was measured last. What both box
+# cases share, and running text never has, is that the region is ENCLOSED by a
+# rectangle - so look for the rectangle.
+#
+# CALIBRATION, as plainly as INK_THRESHOLD above: these bounds come from two
+# mark styles. They fail SAFE - a region that is not enclosed yields
+# granted=None ("no box found"), never granted=True - so being wrong costs a
+# reviewer a keystroke, not a consent nobody gave.
+BOX_ASPECT_MIN = 0.6
+BOX_ASPECT_MAX = 1.7
+BOX_BORDER_MIN_INK = 0.55
+BOX_SPARSE_MARK_MAX_INK = 0.17
+BOX_RING_MARGIN = 0.45
+
+
+def _side_inks(mask: np.ndarray) -> tuple[float, float, float, float]:
+    return (
+        float(mask[0, :].mean()),
+        float(mask[-1, :].mean()),
+        float(mask[:, 0].mean()),
+        float(mask[:, -1].mean()),
+    )
+
+
+def _looks_like_box(
+    image: Image.Image, box: tuple[int, int, int, int], background: float
+) -> bool:
+    """True when the region is a tick-box: square-ish AND enclosed by a rectangle."""
+    x0, y0, x1, y1 = box
+    width, height = x1 - x0, y1 - y0
+    if width <= 2 or height <= 2:
+        return False
+    if not (BOX_ASPECT_MIN <= width / height <= BOX_ASPECT_MAX):
+        return False
+
+    mask = _ink_mask(image, box, background)
+    if mask.size and mask.shape[0] >= 3 and mask.shape[1] >= 3:
+        sides = _side_inks(mask)
+        # Case 1: _locate_box caught the border - all four sides inked.
+        if min(sides) >= BOX_BORDER_MIN_INK:
+            return True
+        # Case 2: it caught only the MARK. A tick is a pair of diagonal strokes,
+        # so its bounding box has empty corners and a sparse perimeter. A printed
+        # glyph fills its own bounding box and cannot be this sparse - measured,
+        # marks 0.080-0.130, glyphs 0.211-0.434.
+        perimeter = np.concatenate(
+            [mask[0, :], mask[-1, :], mask[:, 0], mask[:, -1]]
+        )
+        if float(perimeter.mean()) <= BOX_SPARSE_MARK_MAX_INK:
+            return True
+
+    # Case 3: a dense mark inside a box - neither border nor sparse. The border
+    # is then just outside, so look for it in a ring. Running text has no ring.
+    mx = max(2, int(width * BOX_RING_MARGIN))
+    my = max(2, int(height * BOX_RING_MARGIN))
+    ring = (
+        max(0, x0 - mx), max(0, y0 - my),
+        min(image.width, x1 + mx), min(image.height, y1 + my),
+    )
+    ring_mask = _ink_mask(image, ring, background)
+    if ring_mask.size == 0 or ring_mask.shape[0] < 3 or ring_mask.shape[1] < 3:
+        return False
+    return min(_side_inks(ring_mask)) >= BOX_BORDER_MIN_INK
+
+
 def _interior_ink(image: Image.Image, box: tuple[int, int, int, int], background: float) -> float:
     x0, y0, x1, y1 = box
     inset_x = int((x1 - x0) * BORDER_INSET)
@@ -321,6 +404,17 @@ def read(
                     and MIN_BOX_SIDE <= box_height <= MAX_BOX_SIDE
                 ):
                     best_box = None
+
+            if best_box is not None and not _looks_like_box(
+                image, best_box, backgrounds[page.page]
+            ):
+                # Right size, wrong thing. The size check above passes printed
+                # text of roughly box dimensions, and the ink density of letters
+                # is far above INK_THRESHOLD - so without this the reading is a
+                # confident grant of a consent nobody gave. Dropping to None
+                # makes it "no box found", which the app renders differently
+                # from "found the box, it was empty" on purpose.
+                best_box = None
 
             best_ink = (
                 _interior_ink(image, best_box, backgrounds[page.page])

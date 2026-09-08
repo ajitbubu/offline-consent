@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 
 from app import fields
-from app.contract import FieldRequest, Page
+from app.contract import FieldRequest, Page, Token
 from app.engines import get_engine
 
 from PIL import ImageDraw
@@ -382,3 +382,89 @@ def test_a_bracketed_qualifier_is_not_a_value_even_with_the_opener_lost():
     assert fields._looks_like_instruction("(remitter)")
     assert fields._looks_like_instruction("remitter)")
     assert not fields._looks_like_instruction("Sharma")
+
+
+def test_a_comb_survives_a_label_whose_box_is_narrow():
+    """REGRESSION. Comb detection must not depend on the label's width.
+
+    The band the guard used to classify was `_band_right`, whose right edge is
+    the label box plus FIRST_GAP_LIMIT of the page. So a narrower label meant a
+    shorter band, and the band was landing with EXACTLY the five dividers
+    `_looks_like_comb` requires. One pixel of OCR jitter either way decided
+    whether the field returned null or handed back the cell walls as a name.
+
+    It passed on every developer machine and failed on CI, because the two
+    render "Full name" in different typefaces and Tesseract reports the box a
+    few pixels apart. Here the label is drawn small on purpose: that is the CI
+    geometry, reproduced deterministically on any host.
+    """
+    image = Image.new("L", (1400, 200), 255)
+    draw = ImageDraw.Draw(image)
+    # "Name", not "Full name". Same legibility, a much narrower box - which is
+    # the only variable under test. Shrinking the type instead would have
+    # stopped OCR reading the label at all and tested nothing.
+    draw.text((60, 80), "Name", font=_font(36), fill=0)
+
+    left, cell, top, bottom = 460, 60, 70, 130
+    for i in range(13):
+        draw.line([left + i * cell, top, left + i * cell, bottom], fill=0, width=3)
+    for i, character in enumerate("FIRSTNAME"):
+        draw.text((left + i * cell + 20, top + 14), character, font=_font(28), fill=0)
+
+    pages = _pages(image)
+    result = _by_key(fields.read(pages, [NAME], {1: image}), "fullName")
+
+    assert result.anchor_score >= fields.MIN_ANCHOR_SCORE  # the label WAS found
+    assert result.value is None
+
+
+def test_an_illegible_read_is_reported_as_nothing_read():
+    """REGRESSION. Mush is not a value, however confidently the label matched.
+
+    When the comb detector missed, OCR handed back "Flee dsdrdstatetel fod" -
+    what it made of the cell walls - at 0.053, and every layer downstream
+    accepted it. A reviewer shown that beside a name field learns to click past
+    the field, which is the opposite of what pre-fill is for.
+
+    Built from tokens rather than pixels so the confidence is exact and the
+    test says nothing about any particular OCR engine.
+    """
+    label = [
+        Token(text="Full", bbox=(60, 80, 130, 110), confidence=0.96),
+        Token(text="name", bbox=(140, 80, 215, 110), confidence=0.96),
+    ]
+    mush = [Token(text="Flee dsdrdstatetel fod", bbox=(460, 80, 1120, 110), confidence=0.053)]
+    pages = [Page(page=1, width=1400, height=200, tokens=label + mush)]
+
+    result = _by_key(fields.read(pages, [NAME], None), "fullName")
+
+    assert result.anchor_score >= fields.MIN_ANCHOR_SCORE  # the label WAS found
+    assert result.value is None
+    assert result.confidence == 0.0
+
+
+def test_a_page_with_almost_no_tokens_reports_nothing_instead_of_crashing():
+    """REGRESSION. A near-blank page must not take the whole document down.
+
+    `find_anchor` tries windows of the label's word count plus or minus two, and
+    clamps its loop with max(1, ...). On a page holding fewer tokens than the
+    widest window that clamp lets `start + width` run past the end of the list,
+    and `_label_bonus` indexed it without checking the upper bound. The result
+    was IndexError raised out of the middle of extraction.
+
+    Real scans hit this: a cover sheet, a signature page, anything image-only
+    that OCR returns two or three words for.
+    """
+    pages = [
+        Page(
+            page=1,
+            width=1400,
+            height=200,
+            tokens=[Token(text="Name", bbox=(60, 80, 150, 110), confidence=0.9)],
+        )
+    ]
+
+    results = fields.read(pages, [NAME], None)
+
+    assert [r.key for r in results] == ["fullName"]
+    assert results[0].value is None

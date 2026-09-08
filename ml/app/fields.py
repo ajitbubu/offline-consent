@@ -279,6 +279,20 @@ def _looks_like_label(text: str) -> bool:
 # to the reviewer as something the scan offered, and never filled in for them.
 SHAPE_MISMATCH_CEILING = 0.35
 
+# Below this the characters were not read, they were guessed, and the honest
+# answer is that the field was not read at all.
+#
+# Every other guard here asks whether a read is the RIGHT thing. This one asks
+# whether it is a read at all, and it is the last line: when the comb detector
+# missed, OCR handed back "Flee dsdrdstatetel fod" - mush off the cell walls -
+# at 0.053, and nothing downstream rejected it. A real read of real characters
+# does not score near here; the corpus's worst genuine field sits above 0.4.
+#
+# Deliberately not a ceiling like the one above. A shape mismatch is a legible
+# value in the wrong format, which a reviewer can judge. This is noise, and
+# showing noise beside a field teaches a reviewer to click past it.
+MIN_LEGIBLE_CONFIDENCE = 0.2
+
 
 def _plausible_for_kind(kind: str, value: str) -> bool:
     """Does the read look like the KIND of thing that was asked for?
@@ -432,7 +446,13 @@ def _label_bonus(tokens: list[Token], end_index: int) -> float:
         following = tokens[end_index].text.strip()
         if following.startswith(":") or following.startswith("*"):
             return LABEL_PUNCTUATION_BONUS
-    if end_index - 1 >= 0:
+    # Both bounds. find_anchor tries windows of the label's word count plus or
+    # minus two, and clamps its loop with max(1, ...), so on a page holding
+    # fewer tokens than the widest window it calls this with an end_index past
+    # the end. Guarding only the low side raised IndexError out of the middle of
+    # extraction - a near-blank page, a cover sheet or an image-only scan took
+    # the whole document down instead of reporting no fields.
+    if 0 <= end_index - 1 < len(tokens):
         last = tokens[end_index - 1].text.strip()
         if last.endswith(":") or last.endswith("*:") or last.endswith("*"):
             return LABEL_PUNCTUATION_BONUS
@@ -794,8 +814,24 @@ def _read_anchored(
     if images is not None and tokens:
         image = images.get(page.page)
         if image is not None:
+            # Read to the page edge, NOT to _band_right's limit. That limit is
+            # FIRST_GAP_LIMIT, which answers "how far right might this label's
+            # value start" - a question about the label. Whether cells are
+            # printed is a question about the paper, and the two must not share
+            # an edge.
+            #
+            # Sharing it put the guard one pixel from silent failure. The band's
+            # right edge is the label box plus a fraction of the page, so it
+            # moves whenever OCR reports the label a few pixels narrower, and it
+            # was landing with EXACTLY the five dividers _looks_like_comb needs.
+            # Measured on the SBI comb fixture: right edge 700 found five walls
+            # and nulled the field, 699 found four and handed back
+            # "Flee dsdrdstatetel fod" as somebody's name. It passed locally and
+            # failed on the CI runner for no reason but a different Tesseract
+            # build. Reading to the page edge sees all thirteen walls.
             band = _band_right(page, box, page.width)
-            if regions.classify(image, band, page.tokens).kind == "comb":
+            structure = (band[0], band[1], page.width, band[3])
+            if regions.classify(image, structure, page.tokens).kind == "comb":
                 tokens = []
 
     if request.kind in _SHAPED_KINDS:
@@ -839,6 +875,19 @@ def _read_anchored(
     confidence = min(score, _mean_confidence(tokens))
     if not _plausible_for_kind(request.kind, value):
         confidence = min(confidence, SHAPE_MISMATCH_CEILING)
+
+    if confidence < MIN_LEGIBLE_CONFIDENCE:
+        # Illegible. Reported the same way a blank field is, because that is
+        # what the reviewer is looking at: nothing they can use.
+        return FieldResult(
+            key=request.key,
+            value=None,
+            confidence=0.0,
+            anchor_score=score,
+            method="anchored",
+            page=page.page,
+            bbox=box,
+        )
 
     return FieldResult(
         key=request.key,

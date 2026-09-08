@@ -14,10 +14,19 @@ LABELS = [
 ]
 
 # A real TTF is needed: PIL's built-in bitmap font renders too small for OCR.
+#
+# THE VENDORED FONT COMES FIRST, and that ordering is the whole point. These
+# tests render an image and then OCR it, so the typeface is an input to the
+# assertion, not decoration. Picking whatever the host happens to have meant
+# Arial here and DejaVu on the Linux runner: the same drawing code produced
+# different glyph metrics, different tokens, and a test that passed on every
+# developer machine while failing in CI. Rendering has to be identical
+# everywhere or the suite is measuring the host, not the code.
 FONT_CANDIDATES = [
+    str(Path(__file__).parent / "fonts" / "DejaVuSans.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
 
 

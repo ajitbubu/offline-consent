@@ -1,0 +1,9 @@
+DejaVuSans.ttf is vendored so that the rendering tests produce byte-identical
+images on every machine. It is not shipped with the service and is used only by
+the test suite.
+
+DejaVu fonts are released under a permissive Bitstream Vera derived licence:
+https://dejavu-fonts.github.io/License.html
+
+Fonts are (c) Bitstream (Bitstream Vera) and (c) Tavmjong Bah (DejaVu changes).
+Bitstream Vera is a trademark of Bitstream, Inc.

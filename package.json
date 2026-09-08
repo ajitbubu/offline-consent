@@ -14,6 +14,7 @@
     "calibrate": "node --env-file-if-exists=.env scripts/calibrate-tickbox.mjs",
     "extract:batch": "node --env-file-if-exists=.env scripts/extract-batch.mjs",
     "import:folder": "node --env-file-if-exists=.env scripts/import-folder.mjs",
+    "check:gcp": "node --env-file-if-exists=.env scripts/check-gcp.mjs",
     "sample:form": "node --env-file-if-exists=.env scripts/make-sample-form.mjs",
     "test": "vitest run"
   },
